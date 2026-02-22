@@ -1,6 +1,8 @@
+#[cfg(feature = "kenobi")]
+use std::net::ToSocketAddrs;
 use std::{
     io::{Read, Write},
-    net::{SocketAddr, TcpStream, ToSocketAddrs},
+    net::{SocketAddr, TcpStream},
     ops::DerefMut,
     sync::{
         Arc, Mutex,
@@ -9,7 +11,10 @@ use std::{
 };
 
 use hmac::{Hmac, Mac};
-use kenobi::client::{ClientContext, NoEncryption, NoSigning};
+use kenobi::{
+    client::{ClientContext, NoEncryption, NoSigning},
+    cred::Outbound,
+};
 use sha2::Sha256;
 use uuid::Uuid;
 
@@ -111,7 +116,7 @@ pub struct Session<Auth> {
     auth_ctx: Auth,
     session_id: u64,
 }
-pub struct Kenobi(ClientContext<NoSigning, NoEncryption>);
+pub struct Kenobi(ClientContext<Outbound, NoSigning, NoEncryption>);
 pub trait Authentication {
     fn session_key(&self) -> [u8; 16];
     fn verify_signature(&self, message_without_signature: &[u8], signature: &[u8; 16]) -> bool {
@@ -145,19 +150,17 @@ impl Session<Kenobi> {
         target_principal: Option<&str>,
     ) -> std::io::Result<Arc<Session<Kenobi>>> {
         use kenobi::{
-            Credentials, CredentialsUsage,
+            Credentials,
             client::{ClientBuilder, StepOut},
         };
 
-        let mut ctx = match ClientBuilder::new_from_credentials(
-            Credentials::acquire_default(CredentialsUsage::Outbound, principal).unwrap(),
-            target_principal,
-        )
-        .initialize()
-        {
-            StepOut::Pending(pending) => pending,
-            StepOut::Finished(_) => unreachable!(),
-        };
+        let mut ctx =
+            match ClientBuilder::new_from_credentials(Credentials::outbound(principal).unwrap(), target_principal)
+                .initialize()
+            {
+                StepOut::Pending(pending) => pending,
+                StepOut::Finished(_) => unreachable!(),
+            };
         let mut session_id = 0;
         let mut tcp = connection.tcp.lock().unwrap();
         loop {
@@ -231,10 +234,7 @@ pub struct Tree<Auth> {
     tree_id: u32,
 }
 impl<Auth: Authentication> Session<Auth> {
-    pub fn tree_connect(
-        session: Arc<Session<Auth>>,
-        share_path: &str,
-    ) -> std::io::Result<Tree<Auth>> {
+    pub fn tree_connect(session: Arc<Session<Auth>>, share_path: &str) -> std::io::Result<Tree<Auth>> {
         let header = Smb2SyncHeader {
             credit_charge: 0,
             status: 0,
@@ -251,8 +251,7 @@ impl<Auth: Authentication> Session<Auth> {
         let mut tcp = session.connection.tcp.lock().unwrap();
         write_tcp_message(Some(&session.auth_ctx), &header, &msg, &mut tcp)?;
 
-        let (Smb2SyncHeader { tree_id, .. }, message) =
-            read_tcp_message(&session.auth_ctx, &mut tcp)?;
+        let (Smb2SyncHeader { tree_id, .. }, message) = read_tcp_message(&session.auth_ctx, &mut tcp)?;
         let _response = TreeConnectResponse::read_from(message.as_slice())?;
 
         Ok(Tree {
@@ -347,8 +346,7 @@ mod test {
 
         use super::DEFAULT_PORT;
         use crate::{Client, Connection, Session};
-        let test_server =
-            var("FLAMENCO_TEST_SERVER").unwrap_or(format!("localhost:{DEFAULT_PORT}"));
+        let test_server = var("FLAMENCO_TEST_SERVER").unwrap_or(format!("localhost:{DEFAULT_PORT}"));
         let test_spn = var("FLAMENCO_TEST_SPN").ok();
         let test_target_spn = var("FLAMENCO_TEST_TARGET_SPN").ok();
         let tree = var("FLAMENCO_TEST_TREE").unwrap();
@@ -358,9 +356,7 @@ mod test {
 
         let connection = Connection::new(client.clone()).unwrap();
 
-        let session =
-            Session::new_kenobi(connection, test_spn.as_deref(), test_target_spn.as_deref())
-                .unwrap();
+        let session = Session::new_kenobi(connection, test_spn.as_deref(), test_target_spn.as_deref()).unwrap();
 
         let tree = Session::tree_connect(session.clone(), &tree).unwrap();
 
