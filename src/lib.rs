@@ -9,6 +9,7 @@ use std::{
 };
 
 use hmac::{Hmac, Mac};
+use kenobi::client::{ClientContext, NoEncryption, NoSigning};
 use sha2::Sha256;
 use uuid::Uuid;
 
@@ -152,7 +153,7 @@ impl Session<Kenobi> {
             Credentials::acquire_default(CredentialsUsage::Outbound, principal).unwrap(),
             target_principal,
         )
-        .initialize(None)
+        .initialize()
         {
             StepOut::Pending(pending) => pending,
             StepOut::Finished(_) => unreachable!(),
