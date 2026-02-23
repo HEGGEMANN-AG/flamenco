@@ -12,8 +12,9 @@ use std::{
 
 use hmac::{Hmac, Mac};
 use kenobi::{
-    client::{ClientContext, NoEncryption, NoSigning},
+    client::ClientContext,
     cred::Outbound,
+    typestate::{NoEncryption, NoSigning},
 };
 use sha2::Sha256;
 use uuid::Uuid;
