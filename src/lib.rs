@@ -20,6 +20,7 @@ use kenobi::{
 use crate::{
     access::AccessMask,
     auth::Authentication,
+    client::ServerName,
     command::Command,
     create::{CreateDisposition, CreateRequest, CreateResponse, OplockLevel, ShareAccess},
     dialect::Dialect,
@@ -34,7 +35,7 @@ pub use client::Client;
 mod access;
 mod auth;
 mod byteorder;
-mod client;
+pub mod client;
 mod command;
 mod create;
 mod dialect;
@@ -48,7 +49,11 @@ mod tree;
 pub const DEFAULT_PORT: u16 = 445;
 
 impl Connection {
-    fn new(client: Client, addr: impl ToSocketAddrs + Clone) -> std::io::Result<Connection> {
+    fn new(
+        client: Client,
+        addr: impl ToSocketAddrs + Clone,
+        server_name: Arc<ServerName>,
+    ) -> std::io::Result<Connection> {
         let tcp = Mutex::new(TcpStream::connect(addr)?);
         let mut lock = tcp.lock().unwrap();
         write_tcp_message(
@@ -83,6 +88,7 @@ impl Connection {
             client,
             sessions: Mutex::default(),
             tcp,
+            server_name,
             message_id: AtomicU64::new(1),
             requires_signing: response_body.is_signing_required(),
         })
@@ -95,6 +101,7 @@ pub struct Connection {
     tcp: Mutex<TcpStream>,
     message_id: AtomicU64,
     requires_signing: bool,
+    server_name: Arc<ServerName>,
 }
 impl Connection {
     fn next_message_id(&self) -> u64 {
@@ -103,8 +110,7 @@ impl Connection {
 }
 impl Drop for Connection {
     fn drop(&mut self) {
-        let addr = self.tcp.get_mut().unwrap().peer_addr().unwrap();
-        self.client.deregister_connection(addr);
+        self.client.deregister_connection(&self.server_name);
     }
 }
 
@@ -357,19 +363,22 @@ mod test {
     fn against_data() {
         use std::env::var;
 
-        use super::DEFAULT_PORT;
         use crate::{Client, Session};
-        let test_server = var("FLAMENCO_TEST_SERVER").unwrap_or(format!("localhost:{DEFAULT_PORT}"));
+        let test_server = var("FLAMENCO_TEST_SERVER").unwrap_or_else(|_| "localhost".to_string());
         let test_spn = var("FLAMENCO_TEST_SPN").ok();
-        let test_target_spn = var("FLAMENCO_TEST_TARGET_SPN").ok();
         let tree = var("FLAMENCO_TEST_TREE").unwrap();
         let test_file = var("FLAMENCO_TEST_FILE").unwrap();
 
         let client = Client::new();
 
-        let connection = client.connect(&test_server).unwrap();
+        let connection = client.connect(test_server.as_str(), None).unwrap();
 
-        let session = Session::new_kenobi(connection, test_spn.as_deref(), test_target_spn.as_deref()).unwrap();
+        let session = Session::new_kenobi(
+            connection,
+            test_spn.as_deref(),
+            Some(format!("cifs/{test_server}").as_str()),
+        )
+        .unwrap();
 
         let tree = Session::tree_connect(session.clone(), &tree).unwrap();
 
