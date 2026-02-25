@@ -25,6 +25,7 @@ use crate::{
     command::Command,
     create::{CreateDisposition, CreateRequest, CreateResponse, OplockLevel, ShareAccess},
     dialect::Dialect,
+    file::{File, FileId},
     header::{FLAG_SIGNED, Flags, Smb2SyncHeader},
     negotiate::{NegotiateRequest, NegotiateResponse},
     security::SecurityMode16,
@@ -135,13 +136,50 @@ pub struct Session {
     auth_ctx: Arc<dyn Authentication>,
     tree_connects_by_id: Mutex<HashMap<u32, Weak<Tree>>>,
     tree_connects_by_share_name: Mutex<HashMap<Arc<str>, Weak<Tree>>>,
+    open_files_by_id: Mutex<HashMap<FileId, Weak<File>>>,
+    open_files_by_name: Mutex<HashMap<Arc<str>, Weak<File>>>,
     session_id: u64,
 }
 pub struct Kenobi(ClientContext<Outbound, NoSigning, NoEncryption>);
 
 #[cfg(feature = "kenobi")]
 impl Session {
-    pub fn new_kenobi(
+    fn register_file(&self, id: FileId, name: Arc<str>, file: Weak<File>) -> Result<(), std::io::Error> {
+        if self.open_files_by_id.lock().unwrap().insert(id, file.clone()).is_some()
+            || self.open_files_by_name.lock().unwrap().insert(name, file).is_some()
+        {
+            Err(std::io::Error::new(ErrorKind::AddrInUse, "file is already open"))
+        } else {
+            Ok(())
+        }
+    }
+    fn register_tree_connect(
+        &self,
+        tree_id: u32,
+        share_name: Arc<str>,
+        tree: Weak<Tree>,
+    ) -> Result<(), std::io::Error> {
+        if self
+            .tree_connects_by_id
+            .lock()
+            .unwrap()
+            .insert(tree_id, tree.clone())
+            .is_some()
+            || self
+                .tree_connects_by_share_name
+                .lock()
+                .unwrap()
+                .insert(share_name, tree)
+                .is_some()
+        {
+            Err(std::io::Error::new(
+                ErrorKind::AlreadyExists,
+                "tree is already connected",
+            ))
+        } else {
+            Ok(())
+        }
+    }
         connection: Arc<Connection>,
         principal: Option<&str>,
         target_principal: Option<&str>,
@@ -214,6 +252,8 @@ impl Session {
                         connection: connection.clone(),
                         tree_connects_by_id: Mutex::default(),
                         tree_connects_by_share_name: Mutex::default(),
+                        open_files_by_id: Mutex::default(),
+                        open_files_by_name: Mutex::default(),
                         auth_ctx: Arc::new(auth_ctx),
                         session_id,
                     });
@@ -275,30 +315,13 @@ impl Session {
             share_name: share_name.clone(),
             tree_id,
         });
-        if session
-            .tree_connects_by_id
-            .lock()
-            .unwrap()
-            .insert(tree_id, Arc::downgrade(&tree))
-            .is_some()
-            || session
-                .tree_connects_by_share_name
-                .lock()
-                .unwrap()
-                .insert(share_name, Arc::downgrade(&tree))
-                .is_some()
-        {
-            Err(std::io::Error::new(
-                ErrorKind::AlreadyExists,
-                "tree is already connected",
-            ))
-        } else {
-            Ok(tree)
-        }
+        session.register_tree_connect(tree_id, share_name, Arc::downgrade(&tree))?;
+        Ok(tree)
     }
 }
 impl Tree {
-    pub fn create(&self, file_path: &str) -> std::io::Result<CreateResponse> {
+    pub fn create(&self, file_path: &str) -> std::io::Result<Arc<File>> {
+        let file_name: Arc<str> = file_path.to_string().into();
         let header = Smb2SyncHeader {
             credit_charge: 0,
             status: 0,
@@ -316,15 +339,18 @@ impl Tree {
             desired_access: AccessMask::new(0x1),
             share_access: ShareAccess::default(),
             create_disposition: CreateDisposition::default(),
-            file_name: Some(String::from(file_path)),
+            file_name: Some(&file_name),
         };
         let mut tcp = self.session.connection.tcp.lock().unwrap();
         let auth = self.session.auth_ctx.as_ref();
         write_tcp_message(Some(auth), &header, &msg, &mut tcp)?;
 
         let (_header, message) = read_tcp_message(auth, &mut tcp)?;
-        let response = CreateResponse::read_from(message.as_slice())?;
-        Ok(response)
+        let cr @ CreateResponse { file_id, .. } = CreateResponse::read_from(message.as_slice())?;
+        dbg!(&cr);
+        let file = Arc::new(File { file_id });
+        self.session.register_file(file_id, file_name, Arc::downgrade(&file))?;
+        Ok(file)
     }
 }
 impl Drop for Tree {
@@ -408,7 +434,6 @@ mod test {
 
         let tree = Session::tree_connect(session.clone(), &tree).unwrap();
 
-        let create_response = tree.create(&test_file).unwrap();
-        dbg!(create_response);
+        let _create_response = tree.create(&test_file).unwrap();
     }
 }

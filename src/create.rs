@@ -2,14 +2,14 @@ use std::io::{Read, Write};
 
 use crate::{Smb2ClientMessage, access::AccessMask, byteorder::LittleEndian, file::FileId};
 
-pub struct CreateRequest {
+pub struct CreateRequest<'name> {
     pub oplock_level: OplockLevel,
     pub desired_access: AccessMask,
     pub share_access: ShareAccess,
     pub create_disposition: CreateDisposition,
-    pub file_name: Option<String>,
+    pub file_name: Option<&'name str>,
 }
-impl CreateRequest {
+impl CreateRequest<'_> {
     const SIZE_ON_WIRE: u16 = 57;
     fn write_to<W: Write>(&self, mut w: W) -> std::io::Result<()> {
         // size
@@ -54,7 +54,7 @@ impl CreateRequest {
         Ok(())
     }
 }
-impl Smb2ClientMessage for CreateRequest {
+impl Smb2ClientMessage for CreateRequest<'_> {
     fn write_to<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
         self.write_to(writer)
     }
