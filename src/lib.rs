@@ -1,16 +1,17 @@
-#[cfg(feature = "kenobi")]
-use std::net::ToSocketAddrs;
 use std::{
+    collections::HashMap,
+    convert::Infallible,
     io::{Read, Write},
-    net::{SocketAddr, TcpStream},
-    ops::DerefMut,
+    net::{SocketAddr, TcpStream, ToSocketAddrs},
+    ops::{Deref, DerefMut},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, Weak,
         atomic::{AtomicU64, Ordering},
     },
 };
 
 use hmac::{Hmac, Mac};
+#[cfg(feature = "kenobi")]
 use kenobi::{
     client::ClientContext,
     cred::Outbound,
@@ -44,27 +45,25 @@ mod tree;
 
 pub const DEFAULT_PORT: u16 = 445;
 
+#[derive(Default)]
 pub struct Client {
-    server_name: SocketAddr,
+    connections: Arc<Mutex<HashMap<SocketAddr, Weak<Connection>>>>,
     client_guid: Uuid,
 }
 impl Client {
-    pub fn new(addr: impl ToSocketAddrs) -> std::io::Result<Arc<Self>> {
-        let server_name = addr.to_socket_addrs()?.next().unwrap();
-        let client = Self {
-            server_name,
-            client_guid: Uuid::new_v4(),
-        };
+    pub fn new() -> std::io::Result<Arc<Self>> {
+        let client = Self::default();
         Ok(Arc::new(client))
     }
 }
 impl Connection {
-    pub fn new(client: Arc<Client>) -> std::io::Result<Arc<Connection>> {
-        let tcp = TcpStream::connect(client.server_name)?;
-        let tcp = Arc::new(Mutex::new(tcp));
+    pub fn new(client: Arc<Client>, addr: impl ToSocketAddrs + Clone) -> std::io::Result<Arc<Connection>> {
+        let socket = addr.to_socket_addrs()?.next().unwrap();
+        let tcp = TcpStream::connect(socket)?;
+        let tcp = Mutex::new(tcp);
         let mut lock = tcp.lock().unwrap();
         write_tcp_message(
-            None::<&()>,
+            None::<&Infallible>,
             &Smb2SyncHeader {
                 credit_charge: 0,
                 status: 0,
@@ -91,18 +90,23 @@ impl Connection {
         let _response_header = Smb2SyncHeader::read_from(&mut lock.deref_mut())?;
         let response_body = NegotiateResponse::read_from(&mut lock)?;
         drop(lock);
-        Ok(Arc::new(Connection {
-            client,
-            tcp,
-            message_id: AtomicU64::new(1),
-            requires_signing: response_body.is_signing_required(),
+        Ok(Arc::new_cyclic(|weak| {
+            client.connections.lock().unwrap().insert(socket, weak.clone());
+            Connection {
+                client,
+                sessions: Mutex::default(),
+                tcp,
+                message_id: AtomicU64::new(1),
+                requires_signing: response_body.is_signing_required(),
+            }
         }))
     }
 }
 
 pub struct Connection {
     client: Arc<Client>,
-    tcp: Arc<Mutex<TcpStream>>,
+    sessions: Mutex<HashMap<u64, Weak<Session>>>,
+    tcp: Mutex<TcpStream>,
     message_id: AtomicU64,
     requires_signing: bool,
 }
@@ -110,11 +114,18 @@ impl Connection {
     fn next_message_id(&self) -> u64 {
         self.message_id.fetch_add(1, Ordering::Relaxed)
     }
+    pub fn get_session(&self, id: u64) -> Option<Arc<Session>> {
+        let mut map = self.sessions.lock().unwrap();
+        map.remove(&id)?.upgrade().inspect(|undropped| {
+            map.insert(id, Arc::downgrade(undropped));
+        })
+    }
 }
 
-pub struct Session<Auth> {
+pub struct Session {
     connection: Arc<Connection>,
-    auth_ctx: Auth,
+    auth_ctx: Arc<dyn Authentication>,
+    tree_connects: Mutex<HashMap<u32, Weak<Tree>>>,
     session_id: u64,
 }
 pub struct Kenobi(ClientContext<Outbound, NoSigning, NoEncryption>);
@@ -132,7 +143,7 @@ pub trait Authentication {
         hmac.finalize().into_bytes()[..16].try_into().unwrap()
     }
 }
-impl Authentication for () {
+impl Authentication for Infallible {
     fn session_key(&self) -> [u8; 16] {
         unreachable!()
     }
@@ -143,16 +154,21 @@ impl Authentication for Kenobi {
         raw_key[0..16].try_into().unwrap()
     }
 }
+impl<T: Deref<Target: Authentication>> Authentication for &T {
+    fn session_key(&self) -> [u8; 16] {
+        T::Target::session_key(self)
+    }
+}
 #[cfg(feature = "kenobi")]
-impl Session<Kenobi> {
+impl Session {
     pub fn new_kenobi(
         connection: Arc<Connection>,
         principal: Option<&str>,
         target_principal: Option<&str>,
-    ) -> std::io::Result<Arc<Session<Kenobi>>> {
+    ) -> std::io::Result<Arc<Session>> {
         use kenobi::{
-            Credentials,
             client::{ClientBuilder, StepOut},
+            cred::Credentials,
         };
 
         let mut ctx =
@@ -172,7 +188,7 @@ impl Session<Kenobi> {
             };
 
             write_tcp_message(
-                None::<&()>,
+                None::<&Infallible>,
                 &Smb2SyncHeader {
                     credit_charge: 1,
                     status: 0,
@@ -218,24 +234,28 @@ impl Session<Kenobi> {
                         };
                     }
 
-                    let session = Session {
-                        connection: connection.clone(),
-                        auth_ctx,
-                        session_id,
-                    };
-                    return Ok(Arc::new(session));
+                    let session = Arc::new_cyclic(|weak| {
+                        connection.sessions.lock().unwrap().insert(session_id, weak.clone());
+                        Session {
+                            connection: connection.clone(),
+                            tree_connects: Mutex::default(),
+                            auth_ctx: Arc::new(auth_ctx),
+                            session_id,
+                        }
+                    });
+                    return Ok(session);
                 }
             }
         }
     }
 }
 
-pub struct Tree<Auth> {
-    session: Arc<Session<Auth>>,
+pub struct Tree {
+    session: Arc<Session>,
     tree_id: u32,
 }
-impl<Auth: Authentication> Session<Auth> {
-    pub fn tree_connect(session: Arc<Session<Auth>>, share_path: &str) -> std::io::Result<Tree<Auth>> {
+impl Session {
+    pub fn tree_connect(session: Arc<Session>, share_path: &str) -> std::io::Result<Arc<Tree>> {
         let header = Smb2SyncHeader {
             credit_charge: 0,
             status: 0,
@@ -249,19 +269,20 @@ impl<Auth: Authentication> Session<Auth> {
             signature: Default::default(),
         };
         let msg = TreeConnectRequest::new(share_path);
-        let mut tcp = session.connection.tcp.lock().unwrap();
-        write_tcp_message(Some(&session.auth_ctx), &header, &msg, &mut tcp)?;
-
-        let (Smb2SyncHeader { tree_id, .. }, message) = read_tcp_message(&session.auth_ctx, &mut tcp)?;
+        let (Smb2SyncHeader { tree_id, .. }, message) = {
+            let mut tcp = session.connection.tcp.lock().unwrap();
+            let auth = session.auth_ctx.as_ref();
+            write_tcp_message(Some(auth), &header, &msg, &mut tcp)?;
+            read_tcp_message(auth, &mut tcp)?
+        };
         let _response = TreeConnectResponse::read_from(message.as_slice())?;
-
-        Ok(Tree {
-            session: session.clone(),
-            tree_id,
-        })
+        Ok(Arc::new_cyclic(|weak| {
+            session.tree_connects.lock().unwrap().insert(tree_id, weak.clone());
+            Tree { session, tree_id }
+        }))
     }
 }
-impl<Auth: Authentication> Tree<Auth> {
+impl Tree {
     pub fn create(&self, file_path: &str) -> std::io::Result<CreateResponse> {
         let header = Smb2SyncHeader {
             credit_charge: 0,
@@ -283,15 +304,16 @@ impl<Auth: Authentication> Tree<Auth> {
             file_name: Some(String::from(file_path)),
         };
         let mut tcp = self.session.connection.tcp.lock().unwrap();
-        write_tcp_message(Some(&self.session.auth_ctx), &header, &msg, &mut tcp)?;
+        let auth = self.session.auth_ctx.as_ref();
+        write_tcp_message(Some(auth), &header, &msg, &mut tcp)?;
 
-        let (_header, message) = read_tcp_message(&self.session.auth_ctx, &mut tcp)?;
+        let (_header, message) = read_tcp_message(auth, &mut tcp)?;
         let response = CreateResponse::read_from(message.as_slice())?;
         Ok(response)
     }
 }
 
-fn write_tcp_message<Auth: Authentication, W: Write, M: Smb2ClientMessage>(
+fn write_tcp_message<Auth: Authentication + ?Sized, W: Write, M: Smb2ClientMessage>(
     auth: Option<&Auth>,
     header: &Smb2SyncHeader,
     msg: &M,
@@ -313,8 +335,8 @@ fn write_tcp_message<Auth: Authentication, W: Write, M: Smb2ClientMessage>(
     Ok(())
 }
 
-fn read_tcp_message<D: DerefMut<Target: Read>>(
-    auth: &impl Authentication,
+fn read_tcp_message<A: Authentication + ?Sized, D: DerefMut<Target: Read>>(
+    auth: &A,
     tcp: &mut D,
 ) -> std::io::Result<(Smb2SyncHeader, Vec<u8>)> {
     let mut message_len = [0u8; 4];
@@ -353,9 +375,9 @@ mod test {
         let tree = var("FLAMENCO_TEST_TREE").unwrap();
         let test_file = var("FLAMENCO_TEST_FILE").unwrap();
 
-        let client = Client::new(test_server).unwrap();
+        let client = Client::new().unwrap();
 
-        let connection = Connection::new(client.clone()).unwrap();
+        let connection = Connection::new(client.clone(), test_server).unwrap();
 
         let session = Session::new_kenobi(connection, test_spn.as_deref(), test_target_spn.as_deref()).unwrap();
 
