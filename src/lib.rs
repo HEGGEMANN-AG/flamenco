@@ -1,8 +1,8 @@
 use std::{
     collections::HashMap,
     convert::Infallible,
-    io::{Read, Write},
-    net::{TcpStream, ToSocketAddrs},
+    io::{ErrorKind, Read, Write},
+    net::{SocketAddr, TcpStream, ToSocketAddrs},
     ops::DerefMut,
     sync::{
         Arc, Mutex, Weak,
@@ -48,7 +48,7 @@ mod tree;
 pub const DEFAULT_PORT: u16 = 445;
 
 impl Connection {
-    pub fn new(client: Client, addr: impl ToSocketAddrs + Clone) -> std::io::Result<Arc<Connection>> {
+    fn new(client: Client, addr: impl ToSocketAddrs + Clone) -> std::io::Result<(Connection, SocketAddr)> {
         let tcp = Mutex::new(TcpStream::connect(addr)?);
         let mut lock = tcp.lock().unwrap();
         write_tcp_message(
@@ -78,20 +78,18 @@ impl Connection {
 
         let _response_header = Smb2SyncHeader::read_from(&mut lock.deref_mut())?;
         let response_body = NegotiateResponse::read_from(&mut lock)?;
-        let addr = lock.peer_addr()?;
-        let cl2 = client.clone();
-        std::thread::spawn(|| cl2);
+        let peer = lock.peer_addr()?;
         drop(lock);
-        Ok(Arc::new_cyclic(|weak| {
-            client.register_connection(addr, weak.clone());
+        Ok((
             Connection {
                 client,
                 sessions: Mutex::default(),
                 tcp,
                 message_id: AtomicU64::new(1),
                 requires_signing: response_body.is_signing_required(),
-            }
-        }))
+            },
+            peer,
+        ))
     }
 }
 
@@ -196,17 +194,26 @@ impl Session {
                             panic!("Invalid session etablish signature");
                         };
                     }
-
-                    let session = Arc::new_cyclic(|weak| {
-                        connection.sessions.lock().unwrap().insert(session_id, weak.clone());
-                        Session {
-                            connection: connection.clone(),
-                            tree_connects: Mutex::default(),
-                            auth_ctx: Arc::new(auth_ctx),
-                            session_id,
-                        }
+                    let session = Arc::new(Session {
+                        connection: connection.clone(),
+                        tree_connects: Mutex::default(),
+                        auth_ctx: Arc::new(auth_ctx),
+                        session_id,
                     });
-                    return Ok(session);
+                    return if connection
+                        .sessions
+                        .lock()
+                        .unwrap()
+                        .insert(session_id, Arc::downgrade(&session))
+                        .is_some()
+                    {
+                        Err(std::io::Error::new(
+                            ErrorKind::AlreadyExists,
+                            "session ID already in use",
+                        ))
+                    } else {
+                        Ok(session)
+                    };
                 }
             }
         }
@@ -244,10 +251,24 @@ impl Session {
             read_tcp_message(auth, &mut tcp)?
         };
         let _response = TreeConnectResponse::read_from(message.as_slice())?;
-        Ok(Arc::new_cyclic(|weak| {
-            session.tree_connects.lock().unwrap().insert(tree_id, weak.clone());
-            Tree { session, tree_id }
-        }))
+        let tree = Arc::new(Tree {
+            session: session.clone(),
+            tree_id,
+        });
+        if session
+            .tree_connects
+            .lock()
+            .unwrap()
+            .insert(tree_id, Arc::downgrade(&tree))
+            .is_some()
+        {
+            Err(std::io::Error::new(
+                ErrorKind::AlreadyExists,
+                "tree is already connected",
+            ))
+        } else {
+            Ok(tree)
+        }
     }
 }
 impl Tree {
@@ -341,7 +362,7 @@ mod test {
         use std::env::var;
 
         use super::DEFAULT_PORT;
-        use crate::{Client, Connection, Session};
+        use crate::{Client, Session};
         let test_server = var("FLAMENCO_TEST_SERVER").unwrap_or(format!("localhost:{DEFAULT_PORT}"));
         let test_spn = var("FLAMENCO_TEST_SPN").ok();
         let test_target_spn = var("FLAMENCO_TEST_TARGET_SPN").ok();
@@ -350,7 +371,7 @@ mod test {
 
         let client = Client::new();
 
-        let connection = Connection::new(client, test_server).unwrap();
+        let connection = client.connect(&test_server).unwrap();
 
         let session = Session::new_kenobi(connection, test_spn.as_deref(), test_target_spn.as_deref()).unwrap();
 
