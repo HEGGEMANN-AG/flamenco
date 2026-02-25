@@ -50,12 +50,12 @@ mod tree;
 
 pub const DEFAULT_PORT: u16 = 445;
 
-impl Connection {
+impl Connection<'_> {
     fn new(
         client: Client,
         addr: impl ToSocketAddrs + Clone,
         server_name: Arc<ServerName>,
-    ) -> std::io::Result<Connection> {
+    ) -> std::io::Result<Connection<'_>> {
         let tcp = Mutex::new(TcpStream::connect(addr)?);
         let mut lock = tcp.lock().unwrap();
         write_tcp_message(
@@ -108,9 +108,9 @@ impl Connection {
     }
 }
 
-pub struct Connection {
-    client: Client,
-    sessions: Mutex<HashMap<u64, Weak<Session>>>,
+pub struct Connection<'cred> {
+    client: Client<'cred>,
+    sessions: Mutex<HashMap<u64, Weak<Session<'cred>>>>,
     tcp: Mutex<TcpStream>,
     message_id: AtomicU64,
     max_read_size: u32,
@@ -120,30 +120,30 @@ pub struct Connection {
     server_guid: Uuid,
     server_name: Arc<ServerName>,
 }
-impl Connection {
+impl Connection<'_> {
     fn next_message_id(&self) -> u64 {
         self.message_id.fetch_add(1, Ordering::Relaxed)
     }
 }
-impl Drop for Connection {
+impl Drop for Connection<'_> {
     fn drop(&mut self) {
         self.client.deregister_connection(&self.server_name);
     }
 }
 
-pub struct Session {
-    connection: Arc<Connection>,
-    auth_ctx: Arc<dyn Authentication>,
-    tree_connects_by_id: Mutex<HashMap<u32, Weak<Tree>>>,
-    tree_connects_by_share_name: Mutex<HashMap<Arc<str>, Weak<Tree>>>,
+pub struct Session<'cred> {
+    connection: Arc<Connection<'cred>>,
+    auth_ctx: Arc<dyn Authentication + 'cred>,
+    tree_connects_by_id: Mutex<HashMap<u32, Weak<Tree<'cred>>>>,
+    tree_connects_by_share_name: Mutex<HashMap<Arc<str>, Weak<Tree<'cred>>>>,
     open_files_by_id: Mutex<HashMap<FileId, Weak<File>>>,
     open_files_by_name: Mutex<HashMap<Arc<str>, Weak<File>>>,
     session_id: u64,
 }
-pub struct Kenobi<C>(ClientContext<C, NoSigning, NoEncryption>);
+pub struct Kenobi<'cred, C>(ClientContext<'cred, C, NoSigning, NoEncryption>);
 
 #[cfg(feature = "kenobi")]
-impl Session {
+impl Session<'_> {
     fn register_file(&self, id: FileId, name: Arc<str>, file: Weak<File>) -> Result<(), std::io::Error> {
         if self.open_files_by_id.lock().unwrap().insert(id, file.clone()).is_some()
             || self.open_files_by_name.lock().unwrap().insert(name, file).is_some()
@@ -153,41 +153,14 @@ impl Session {
             Ok(())
         }
     }
-    fn register_tree_connect(
-        &self,
-        tree_id: u32,
-        share_name: Arc<str>,
-        tree: Weak<Tree>,
-    ) -> Result<(), std::io::Error> {
-        if self
-            .tree_connects_by_id
-            .lock()
-            .unwrap()
-            .insert(tree_id, tree.clone())
-            .is_some()
-            || self
-                .tree_connects_by_share_name
-                .lock()
-                .unwrap()
-                .insert(share_name, tree)
-                .is_some()
-        {
-            Err(std::io::Error::new(
-                ErrorKind::AlreadyExists,
-                "tree is already connected",
-            ))
-        } else {
-            Ok(())
-        }
-    }
-    pub fn new_kenobi<C: OutboundUsable + Sync + Send + 'static>(
-        connection: Arc<Connection>,
-        credentials: Credentials<C>,
+    pub fn new_kenobi<'cred, C: OutboundUsable + Sync + Send + 'static>(
+        connection: Arc<Connection<'cred>>,
+        credentials: &'cred Credentials<C>,
         target_principal: Option<&str>,
-    ) -> std::io::Result<Arc<Session>> {
+    ) -> std::io::Result<Arc<Session<'cred>>> {
         use kenobi::client::{ClientBuilder, StepOut};
 
-        let mut ctx = match ClientBuilder::new_from_credentials(credentials, target_principal).initialize() {
+        let mut ctx = match ClientBuilder::new_from_credentials(&credentials, target_principal).initialize() {
             StepOut::Pending(pending) => pending,
             StepOut::Finished(_) => unreachable!(),
         };
@@ -271,19 +244,48 @@ impl Session {
         }
     }
 }
-impl Drop for Session {
+impl<'cred> Session<'cred> {
+    fn register_tree_connect(
+        &self,
+        tree_id: u32,
+        share_name: Arc<str>,
+        tree: Weak<Tree<'cred>>,
+    ) -> Result<(), std::io::Error> {
+        if self
+            .tree_connects_by_id
+            .lock()
+            .unwrap()
+            .insert(tree_id, tree.clone())
+            .is_some()
+            || self
+                .tree_connects_by_share_name
+                .lock()
+                .unwrap()
+                .insert(share_name, tree)
+                .is_some()
+        {
+            Err(std::io::Error::new(
+                ErrorKind::AlreadyExists,
+                "tree is already connected",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+impl Drop for Session<'_> {
     fn drop(&mut self) {
         self.connection.sessions.lock().unwrap().remove(&self.session_id);
     }
 }
 
-pub struct Tree {
-    session: Arc<Session>,
+pub struct Tree<'cred> {
+    session: Arc<Session<'cred>>,
     tree_id: u32,
     share_name: Arc<str>,
 }
-impl Session {
-    pub fn tree_connect(session: Arc<Session>, share_path: &str) -> std::io::Result<Arc<Tree>> {
+impl Session<'_> {
+    pub fn tree_connect<'cred>(session: Arc<Session<'cred>>, share_path: &str) -> std::io::Result<Arc<Tree<'cred>>> {
         let header = Smb2SyncHeader {
             credit_charge: 0,
             status: 0,
@@ -314,7 +316,7 @@ impl Session {
         Ok(tree)
     }
 }
-impl Tree {
+impl Tree<'_> {
     pub fn create(&self, file_path: &str) -> std::io::Result<Arc<File>> {
         let file_name: Arc<str> = file_path.to_string().into();
         let header = Smb2SyncHeader {
@@ -348,7 +350,7 @@ impl Tree {
         Ok(file)
     }
 }
-impl Drop for Tree {
+impl Drop for Tree<'_> {
     fn drop(&mut self) {
         self.session.tree_connects_by_id.lock().unwrap().remove(&self.tree_id);
         self.session
@@ -425,7 +427,7 @@ mod test {
         let credentials = Credentials::outbound(test_spn.as_deref()).unwrap();
 
         let session =
-            Session::new_kenobi(connection, credentials, Some(format!("cifs/{test_server}").as_str())).unwrap();
+            Session::new_kenobi(connection, &credentials, Some(format!("cifs/{test_server}").as_str())).unwrap();
 
         let tree = Session::tree_connect(session.clone(), &tree).unwrap();
 

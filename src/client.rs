@@ -11,18 +11,18 @@ use uuid::Uuid;
 use crate::Connection;
 
 #[derive(Clone, Default)]
-pub struct Client {
-    connections: ClientInner,
+pub struct Client<'cred> {
+    connections: ClientInner<'cred>,
     client_guid: Uuid,
 }
 #[derive(Default)]
-struct ClientInner(Arc<Mutex<HashMap<Arc<ServerName>, Weak<Connection>>>>);
-impl Clone for ClientInner {
+struct ClientInner<'cred>(Arc<Mutex<HashMap<Arc<ServerName>, Weak<Connection<'cred>>>>>);
+impl Clone for ClientInner<'_> {
     fn clone(&self) -> Self {
         Self(Arc::clone(&self.0))
     }
 }
-impl Client {
+impl Client<'_> {
     pub fn new() -> Self {
         Self::default()
     }
@@ -32,7 +32,9 @@ impl Client {
     pub(crate) fn deregister_connection(&self, con: &ServerName) {
         self.connections.0.lock().unwrap().remove(con);
     }
-    pub fn connect(&self, addr: impl ToServerName, port: Option<u16>) -> std::io::Result<Arc<Connection>> {
+}
+impl<'cred> Client<'cred> {
+    pub fn connect(&'cred self, addr: impl ToServerName, port: Option<u16>) -> std::io::Result<Arc<Connection<'cred>>> {
         let server_name = Arc::new(addr.to_server_name());
         let port = port.unwrap_or(445);
         match server_name.as_ref() {
@@ -41,10 +43,10 @@ impl Client {
         }
     }
     fn try_connections(
-        &self,
+        &'cred self,
         server_name: Arc<ServerName>,
         sock: impl ToSocketAddrs,
-    ) -> std::io::Result<Arc<Connection>> {
+    ) -> std::io::Result<Arc<Connection<'cred>>> {
         let mut last_error = None;
         let mut connections = self.connections.0.lock().unwrap();
         for socket_addr in sock.to_socket_addrs()? {
@@ -67,10 +69,10 @@ impl Client {
     }
 }
 
-fn register_connection(
+fn register_connection<'cred>(
     server_name: Arc<ServerName>,
-    connection: Weak<Connection>,
-    s: &mut HashMap<Arc<ServerName>, Weak<Connection>>,
+    connection: Weak<Connection<'cred>>,
+    s: &mut HashMap<Arc<ServerName>, Weak<Connection<'cred>>>,
 ) -> std::io::Result<()> {
     if s.insert(server_name, connection).is_some() {
         Err(std::io::Error::new(
