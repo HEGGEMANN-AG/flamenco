@@ -190,12 +190,9 @@ impl Session {
                 StepOut::Pending(pending_client_context) => pending_client_context,
                 StepOut::Finished(ctx) => {
                     let auth_ctx = Kenobi(ctx);
-                    if header.flags.contains(FLAG_SIGNED) {
-                        buffer[48..64].copy_from_slice(&[0u8; 16]);
-                        if !auth_ctx.verify_signature(&buffer, &header.signature) {
-                            panic!("Invalid session etablish signature");
-                        };
-                    }
+                    if header.flags.contains(FLAG_SIGNED) && !auth_ctx.verify_signature(&mut buffer) {
+                        panic!("Invalid session etablish signature");
+                    };
                     let session = Arc::new(Session {
                         connection: connection.clone(),
                         tree_connects: Mutex::default(),
@@ -342,11 +339,8 @@ fn read_tcp_message<A: Authentication + ?Sized, D: DerefMut<Target: Read>>(
     tcp.read_exact(&mut buffer)?;
     let mut reader = buffer.as_slice();
     let header = Smb2SyncHeader::read_from(&mut reader)?;
-    if header.flags.contains(FLAG_SIGNED) {
-        (&mut buffer[48..64]).write_all(&[0; 16]).unwrap();
-        if !auth.verify_signature(&buffer, &header.signature) {
-            panic!("Invalid signature")
-        };
+    if header.flags.contains(FLAG_SIGNED) && !auth.verify_signature(&mut buffer) {
+        panic!("Invalid signature")
     }
     Ok((header, buffer[64..].to_vec()))
 }
