@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    io::ErrorKind,
     net::{SocketAddr, ToSocketAddrs},
     sync::{Arc, Mutex, Weak},
 };
@@ -41,18 +42,24 @@ impl Client {
         self.connections.0.lock().unwrap().remove(&con);
     }
     pub fn connect(&self, addr: impl ToSocketAddrs + Clone) -> std::io::Result<Arc<Connection>> {
-        let socket_addr = addr.to_socket_addrs().unwrap().next().unwrap();
-        self.connections
-            .0
-            .lock()
-            .unwrap()
-            .get(&socket_addr)
-            .and_then(|w| w.upgrade())
-            .map(Ok)
-            .unwrap_or_else(|| {
-                let con = Arc::new(Connection::new(self.clone(), socket_addr)?);
-                self.register_connection(socket_addr, Arc::downgrade(&con))?;
-                Ok(con)
-            })
+        let mut last_error = None;
+        let connections = self.connections.0.lock().unwrap();
+        for socket_addr in addr.to_socket_addrs()? {
+            if let Some(con) = connections.get(&socket_addr).and_then(Weak::upgrade) {
+                return Ok(con);
+            };
+            match Connection::new(self.clone(), socket_addr)
+                .map(Arc::new)
+                .and_then(|arc| {
+                    self.register_connection(socket_addr, Arc::downgrade(&arc))?;
+                    Ok(arc)
+                }) {
+                Ok(val) => return Ok(val),
+                Err(e) => {
+                    last_error = Some(e);
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| std::io::Error::new(ErrorKind::InvalidInput, "did not resolve to any input")))
     }
 }
