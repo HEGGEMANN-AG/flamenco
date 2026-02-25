@@ -13,7 +13,7 @@ use std::{
 #[cfg(feature = "kenobi")]
 use kenobi::{
     client::ClientContext,
-    cred::Outbound,
+    cred::{Credentials, OutboundUsable},
     typestate::{NoEncryption, NoSigning},
 };
 use uuid::Uuid;
@@ -140,7 +140,7 @@ pub struct Session {
     open_files_by_name: Mutex<HashMap<Arc<str>, Weak<File>>>,
     session_id: u64,
 }
-pub struct Kenobi(ClientContext<Outbound, NoSigning, NoEncryption>);
+pub struct Kenobi<C>(ClientContext<C, NoSigning, NoEncryption>);
 
 #[cfg(feature = "kenobi")]
 impl Session {
@@ -180,22 +180,17 @@ impl Session {
             Ok(())
         }
     }
+    pub fn new_kenobi<C: OutboundUsable + Sync + Send>(
         connection: Arc<Connection>,
-        principal: Option<&str>,
+        credentials: Credentials<C>,
         target_principal: Option<&str>,
     ) -> std::io::Result<Arc<Session>> {
-        use kenobi::{
-            client::{ClientBuilder, StepOut},
-            cred::Credentials,
-        };
+        use kenobi::client::{ClientBuilder, StepOut};
 
-        let mut ctx =
-            match ClientBuilder::new_from_credentials(Credentials::outbound(principal).unwrap(), target_principal)
-                .initialize()
-            {
-                StepOut::Pending(pending) => pending,
-                StepOut::Finished(_) => unreachable!(),
-            };
+        let mut ctx = match ClientBuilder::new_from_credentials(credentials, target_principal).initialize() {
+            StepOut::Pending(pending) => pending,
+            StepOut::Finished(_) => unreachable!(),
+        };
         let mut session_id = 0;
         let mut tcp = connection.tcp.lock().unwrap();
         loop {
@@ -415,6 +410,8 @@ mod test {
     fn against_data() {
         use std::env::var;
 
+        use kenobi::cred::Credentials;
+
         use crate::{Client, Session};
         let test_server = var("FLAMENCO_TEST_SERVER").unwrap_or_else(|_| "localhost".to_string());
         let test_spn = var("FLAMENCO_TEST_SPN").ok();
@@ -425,12 +422,10 @@ mod test {
 
         let connection = client.connect(test_server.as_str(), None).unwrap();
 
-        let session = Session::new_kenobi(
-            connection,
-            test_spn.as_deref(),
-            Some(format!("cifs/{test_server}").as_str()),
-        )
-        .unwrap();
+        let credentials = Credentials::outbound(test_spn.as_deref()).unwrap();
+
+        let session =
+            Session::new_kenobi(connection, credentials, Some(format!("cifs/{test_server}").as_str())).unwrap();
 
         let tree = Session::tree_connect(session.clone(), &tree).unwrap();
 
