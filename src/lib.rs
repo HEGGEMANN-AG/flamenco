@@ -180,7 +180,7 @@ impl Session {
             Ok(())
         }
     }
-    pub fn new_kenobi<C: OutboundUsable + Sync + Send>(
+    pub fn new_kenobi<C: OutboundUsable + Sync + Send + 'static>(
         connection: Arc<Connection>,
         credentials: Credentials<C>,
         target_principal: Option<&str>,

@@ -28,7 +28,7 @@ impl Authentication for Infallible {
         unreachable!()
     }
 }
-impl Authentication for Kenobi {
+impl<C: Sync + Send> Authentication for Kenobi<C> {
     fn session_key(&self) -> [u8; 16] {
         let raw_key = ClientContext::session_key(&self.0);
         raw_key[0..16].try_into().unwrap()
