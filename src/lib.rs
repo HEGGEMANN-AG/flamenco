@@ -14,7 +14,7 @@ use std::{
 use kenobi::{
     client::ClientContext,
     cred::{Credentials, OutboundUsable},
-    typestate::{NoEncryption, NoSigning},
+    typestate::{MaybeDelegation, NoEncryption, NoSigning},
 };
 use uuid::Uuid;
 
@@ -140,7 +140,8 @@ pub struct Session<'cred> {
     open_files_by_name: Mutex<HashMap<Arc<str>, Weak<File>>>,
     session_id: u64,
 }
-pub struct Kenobi<'cred, C>(ClientContext<'cred, C, NoSigning, NoEncryption>);
+#[cfg(feature = "kenobi")]
+pub struct Kenobi<'cred, C>(ClientContext<'cred, C, NoSigning, NoEncryption, MaybeDelegation>);
 
 #[cfg(feature = "kenobi")]
 impl Session<'_> {
@@ -160,7 +161,10 @@ impl Session<'_> {
     ) -> std::io::Result<Arc<Session<'cred>>> {
         use kenobi::client::{ClientBuilder, StepOut};
 
-        let mut ctx = match ClientBuilder::new_from_credentials(&credentials, target_principal).initialize() {
+        let mut ctx = match ClientBuilder::new_from_credentials(credentials, target_principal)
+            .request_delegation()
+            .initialize()
+        {
             StepOut::Pending(pending) => pending,
             StepOut::Finished(_) => unreachable!(),
         };
