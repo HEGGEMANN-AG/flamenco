@@ -10,10 +10,20 @@ use uuid::Uuid;
 
 use crate::Connection;
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Client<'cred> {
     connections: ClientInner<'cred>,
     client_guid: Uuid,
+    pub(crate) signing_required: bool,
+}
+impl Default for Client<'_> {
+    fn default() -> Self {
+        Client {
+            connections: ClientInner::default(),
+            client_guid: Uuid::default(),
+            signing_required: true,
+        }
+    }
 }
 #[derive(Default)]
 struct ClientInner<'cred>(Arc<Mutex<HashMap<Arc<ServerName>, Weak<Connection<'cred>>>>>);
@@ -23,8 +33,11 @@ impl Clone for ClientInner<'_> {
     }
 }
 impl Client<'_> {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(signing_required: bool) -> Self {
+        Self {
+            signing_required,
+            ..Default::default()
+        }
     }
     pub(crate) fn client_id(&self) -> Uuid {
         self.client_guid

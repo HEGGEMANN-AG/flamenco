@@ -18,6 +18,8 @@ use kenobi::{
 };
 use uuid::Uuid;
 
+#[cfg(feature = "kenobi")]
+use crate::security::SecurityMode8;
 use crate::{
     access::AccessMask,
     auth::Authentication,
@@ -58,6 +60,11 @@ impl Connection<'_> {
     ) -> std::io::Result<Connection<'_>> {
         let tcp = Mutex::new(TcpStream::connect(addr)?);
         let mut lock = tcp.lock().unwrap();
+        let security_mode = if client.signing_required {
+            SecurityMode16::SIGNING_REQUIRED
+        } else {
+            SecurityMode16::SIGNING_ENABLED
+        };
         write_tcp_message(
             None::<&Infallible>,
             &Smb2SyncHeader {
@@ -73,9 +80,10 @@ impl Connection<'_> {
                 signature: Default::default(),
             },
             &NegotiateRequest {
-                security_mode: SecurityMode16::SIGNING_REQUIRED,
+                security_mode,
                 capabilities: 0x00,
-                client_guid: client.client_id(),
+                // MUST be set to 0 in SMB202
+                client_guid: Uuid::default(),
                 dialects: vec![Dialect::Smb202],
             },
             &mut lock,
@@ -102,6 +110,7 @@ impl Connection<'_> {
             max_transaction_size,
             max_write_size,
             server_guid,
+            client_security_mode: security_mode,
             message_id: AtomicU64::new(1),
             requires_signing: security_mode.signing_required(),
         })
@@ -118,11 +127,15 @@ pub struct Connection<'cred> {
     max_write_size: u32,
     requires_signing: bool,
     server_guid: Uuid,
+    client_security_mode: SecurityMode16,
     server_name: Arc<ServerName>,
 }
 impl Connection<'_> {
     fn next_message_id(&self) -> u64 {
         self.message_id.fetch_add(1, Ordering::Relaxed)
+    }
+    fn capabilities(&self) -> u32 {
+        0
     }
 }
 impl Drop for Connection<'_> {
@@ -170,10 +183,14 @@ impl Session<'_> {
         };
         let mut session_id = 0;
         let mut tcp = connection.tcp.lock().unwrap();
+        let security_mode = if connection.client.signing_required {
+            SecurityMode8::SIGNING_REQUIRED
+        } else {
+            SecurityMode8::SIGNING_ENABLED
+        };
         loop {
             use crate::{
                 header::Flags,
-                security::SecurityMode8,
                 session::{SessionSetupRequest, SessionSetupResponse},
             };
 
@@ -193,7 +210,7 @@ impl Session<'_> {
                 },
                 &SessionSetupRequest {
                     flags: 0,
-                    security_mode: SecurityMode8::SIGNING_REQUIRED,
+                    security_mode,
                     capabilities: 0,
                     previous_session_id: 0,
                     security_buffer: ctx.next_token().to_vec().into_boxed_slice(),
@@ -424,7 +441,7 @@ mod test {
         let tree = var("FLAMENCO_TEST_TREE").unwrap();
         let test_file = var("FLAMENCO_TEST_FILE").unwrap();
 
-        let client = Client::new();
+        let client = Client::new(true);
 
         let connection = client.connect(test_server.as_str(), None).unwrap();
 
