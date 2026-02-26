@@ -2,6 +2,7 @@ use std::io::{ErrorKind, Read};
 
 use crate::header::SyncHeader202;
 
+/// Signature validation and netBIOS stuff should be happening here
 pub fn read_202_message<R: Read>(mut r: R) -> std::io::Result<(SyncHeader202, Box<[u8]>)> {
     let mut bios_size = [0u8; 4];
     r.read_exact(&mut bios_size)?;
