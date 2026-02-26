@@ -1,72 +1,41 @@
-use std::{
-    io::{ErrorKind, Read, Write},
-    num::NonZero,
-};
+use std::num::NonZero;
 
-use crate::{byteorder::LittleEndian, command::Command};
+const PROTOCOL_ID: [u8; 4] = [0xFE, b'S', b'M', b'B'];
 
 #[derive(Debug)]
-pub struct Smb2SyncHeader {
-    pub credit_charge: u16,
-    pub status: u32,
-    pub command: Command,
-    pub credit_request_or_response: u16,
-    pub flags: Flags,
-    pub next_command: Option<NonZero<u32>>,
-    pub message_id: u64,
-    pub tree_id: u32,
-    pub session_id: u64,
-    pub signature: [u8; 16],
+struct SyncHeader202 {
+    command: Command,
+    credits: u16,
+    flags: u32,
+    next_command: Option<NonZero<u32>>,
+    message_id: u64,
+    tree_id: u32,
+    session_id: u64,
+    signature: [u8; 16],
 }
-impl Smb2SyncHeader {
-    const PROTOCOL_ID: [u8; 4] = [0xFE, b'S', b'M', b'B'];
-
-    pub(crate) const SIZE_ON_WIRE: u16 = 64;
-    pub fn write_to<W: Write>(&self, mut writer: W) -> std::io::Result<()> {
-        writer.write_all(&Self::PROTOCOL_ID)?;
-        Self::SIZE_ON_WIRE.write_le(&mut writer)?;
-        self.credit_charge.write_le(&mut writer)?;
-        self.status.write_le(&mut writer)?;
-        (self.command as u16).write_le(&mut writer)?;
-        self.credit_request_or_response.write_le(&mut writer)?;
-        self.flags.0.write_le(&mut writer)?;
-        self.next_command.map_or(0, NonZero::get).write_le(&mut writer)?;
-        self.message_id.write_le(&mut writer)?;
-        0u32.write_le(&mut writer)?;
-        self.tree_id.write_le(&mut writer)?;
-        self.session_id.write_le(&mut writer)?;
-        writer.write_all(&self.signature)?;
-        Ok(())
-    }
-    pub fn read_from<R: Read>(mut read: &mut R) -> std::io::Result<Self> {
-        let mut protocol_id = [0u8; 4];
-        read.read_exact(&mut protocol_id)?;
-        assert_eq!(protocol_id, Self::PROTOCOL_ID);
-
-        let structure_size = u16::read_le(&mut read)?;
-        assert_eq!(64, structure_size);
-
-        let credit_charge = u16::read_le(&mut read)?;
-        let status = u32::read_le(&mut read)?;
-        let command = Command::from_u16(u16::read_le(&mut read)?)
-            .ok_or_else(|| std::io::Error::new(ErrorKind::InvalidData, "invalid command"))?;
-        let credit_request_or_response = u16::read_le(&mut read)?;
-        let flags = u32::read_le(&mut read)?;
-        let next_command = NonZero::new(u32::read_le(&mut read)?);
-
-        let message_id = u64::read_le(&mut read)?;
-        let _reserved = u32::read_le(&mut read)?;
-        let tree_id = u32::read_le(&mut read)?;
-        let session_id = u64::read_le(&mut read)?;
-        let mut signature = [0u8; 16];
-        read.read_exact(&mut signature)?;
-
+impl SyncHeader202 {
+    pub fn from_bytes(b: &[u8; 64]) -> Result<Self, Error> {
+        if b[0..4] != PROTOCOL_ID {
+            return Err(Error::InvalidProtocolID);
+        };
+        if u16::from_be_bytes(*b[4..6].as_array().unwrap()) != 64 {
+            return Err(Error::InvalidSize);
+        }
+        // Ignore credit charge and status
+        let command = u16::from_be_bytes(*b[12..14].as_array().unwrap());
+        let command = Command::from_code(command).ok_or(Error::InvalidCommand)?;
+        let credits = u16::from_be_bytes(*b[14..16].as_array().unwrap());
+        let flags = u32::from_be_bytes(*b[16..20].as_array().unwrap());
+        let next_command = u32::from_be_bytes(*b[20..24].as_array().unwrap());
+        let next_command = NonZero::new(next_command);
+        let message_id = u64::from_be_bytes(*b[24..32].as_array().unwrap());
+        let tree_id = u32::from_be_bytes(*b[36..40].as_array().unwrap());
+        let session_id = u64::from_be_bytes(*b[40..48].as_array().unwrap());
+        let signature: [u8; 16] = *b[48..64].as_array().unwrap();
         Ok(Self {
-            credit_charge,
-            status,
             command,
-            credit_request_or_response,
-            flags: Flags(flags),
+            credits,
+            flags,
             next_command,
             message_id,
             tree_id,
@@ -76,14 +45,27 @@ impl Smb2SyncHeader {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Flags(u32);
-impl Flags {
-    pub fn empty() -> Self {
-        Self::default()
-    }
-    pub fn contains(self, flag: Flags) -> bool {
-        self.0 & flag.0 != 0
+#[derive(Debug)]
+pub enum Error {
+    InvalidProtocolID,
+    InvalidSize,
+    InvalidCommand,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum Command {
+    Negotiate = 0x00,
+    SessionSetup = 0x01,
+    Logoff = 0x02,
+}
+impl Command {
+    pub fn from_code(u: u16) -> Option<Self> {
+        match u {
+            0x00 => Some(Self::Negotiate),
+            0x01 => Some(Self::SessionSetup),
+            0x02 => Some(Self::Logoff),
+            0x03..=0x13 => todo!("unimplemented command"),
+            _ => None,
+        }
     }
 }
-pub const FLAG_SIGNED: Flags = Flags(0x8);

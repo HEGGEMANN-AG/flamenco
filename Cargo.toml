@@ -10,6 +10,6 @@ kenobi = ["dep:kenobi"]
 
 [dependencies]
 uuid = { version = "1.20.0", features = ["v4"] }
-kenobi = { version = "0.2.0", path = "../Kerberos/kenobi", optional = true }
+kenobi = { version = "0.2.0", path = "../Kerberos/kenobi/crates/kenobi", optional = true }
 sha2 = "0.10.9"
 hmac = "0.12.1"
