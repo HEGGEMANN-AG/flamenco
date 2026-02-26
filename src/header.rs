@@ -4,6 +4,7 @@ const PROTOCOL_ID: [u8; 4] = [0xFE, b'S', b'M', b'B'];
 
 #[derive(Debug)]
 pub struct SyncHeader202 {
+    /// ignored when sending
     pub status: u32,
     pub command: Command202,
     pub credits: u16,
