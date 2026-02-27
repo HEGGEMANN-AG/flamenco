@@ -118,6 +118,29 @@ impl Session202<'_, '_> {
             session_id = header.session_id;
         }
     }
+    pub fn close(self) {
+        drop(self);
+    }
+}
+impl<'con, 'cred> Drop for Session202<'con, 'cred> {
+    fn drop(&mut self) {
+        let logoff_header = SyncHeader202Outgoing {
+            command: Command202::Logoff,
+            credits: 0,
+            flags: 0,
+            next_command: None,
+            message_id: self.connection.fetch_increment_message_id(),
+            tree_id: 0,
+            session_id: self.id,
+        };
+        let _ = write_202_message(
+            &mut self.connection.tcp,
+            Some(self.session_key),
+            &logoff_header,
+            &LogoffRequest,
+        );
+        let _ = read_202_message(&mut self.connection.tcp, Validation::Key(self.session_key));
+    }
 }
 
 fn buffer_for_delayed_validation<R: Read>(mut r: R) -> Result<Box<[u8]>, MsgReadError> {
@@ -287,4 +310,18 @@ enum SessionFlags {
     None,
     Guest,
     Anonymous,
+}
+
+#[derive(Debug)]
+struct LogoffRequest;
+impl MessageBody for LogoffRequest {
+    type Err = std::io::Error;
+    fn write_to<W: Write>(&self, mut w: W) -> Result<(), Self::Err> {
+        w.write_all(&4u32.to_le_bytes())?;
+        w.write_all(&0u32.to_le_bytes())?;
+        Ok(())
+    }
+    fn size_hint(&self) -> usize {
+        4
+    }
 }
