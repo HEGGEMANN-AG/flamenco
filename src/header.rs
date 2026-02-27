@@ -61,7 +61,7 @@ impl SyncHeader202Incoming {
         let message_id = u64::from_le_bytes(*b[24..32].as_array().unwrap());
         let tree_id = u32::from_le_bytes(*b[36..40].as_array().unwrap());
         let session_id = u64::from_le_bytes(*b[40..48].as_array().unwrap());
-        let signature: [u8; 16] = *b[48..64].as_array().unwrap();
+        let signature: [u8; 16] = *b.last_chunk().unwrap();
         Ok(Self {
             status,
             command,

@@ -89,9 +89,8 @@ impl Session202<'_, '_> {
                 StepOut::Finished(context) => {
                     let session_key = *context
                         .session_key()
-                        .split_first_chunk::<16>()
-                        .ok_or(SessionSetupError::SessionKeyTooShort)?
-                        .0;
+                        .first_chunk::<16>()
+                        .ok_or(SessionSetupError::SessionKeyTooShort)?;
                     let (_, _) = read_202_message(&*message_buffer, Validation::Key(session_key))?;
                     if flags == SessionFlags::Guest {
                         match connection.client.guest_policy {
@@ -159,7 +158,9 @@ fn buffer_for_delayed_validation<R: Read>(mut r: R) -> Result<Box<[u8]>, MsgRead
     };
     let message_body_size = message_size as usize;
     let mut message_body_with_netbios = vec![0u8; message_body_size + 4].into_boxed_slice();
-    let (bios, body) = message_body_with_netbios.split_at_mut(4);
+    let (bios, body) = message_body_with_netbios
+        .split_first_chunk_mut::<4>()
+        .unwrap();
     bios.copy_from_slice(&bios_size);
     r.read_exact(body).map_err(MsgReadError::Connection)?;
     Ok(message_body_with_netbios)
