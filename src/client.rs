@@ -1,11 +1,11 @@
 use std::{
-    io::{Cursor, ErrorKind},
+    io::Cursor,
     net::{TcpStream, ToSocketAddrs},
     num::NonZero,
 };
 
 use crate::{
-    error,
+    error::{ErrorResponse2, ServerError},
     header::{Command202, SyncHeader202Outgoing},
     message::{ReadError, WriteError, read_202_message, write_202_message},
     negotiate::{Dialect, NegotiateError, NegotiateRequest202, NegotiateResponse},
@@ -38,17 +38,7 @@ impl Client202 {
 
         let (header, body) = read_202_message(&mut tcp)?;
         if let Some(code) = NonZero::new(header.status) {
-            return Err(match error::ErrorResponse2::from_bytes(&body) {
-                Ok(body) => ConnectError::ServerError { code, body },
-                Err(error::ParseError::UnexpectedEof) => {
-                    std::io::Error::new(ErrorKind::UnexpectedEof, "error body ended early").into()
-                }
-                Err(
-                    error::ParseError::InvalidStructureSize
-                    | error::ParseError::ContextNotSupported
-                    | error::ParseError::ExcessTrailingBytes,
-                ) => ConnectError::InvalidMessage,
-            });
+            return Err(ConnectError::handle_error_body(code, &body));
         }
         if header.command != Command202::Negotiate || header.message_id != 0 {
             return Err(ConnectError::InvalidMessage);
@@ -104,8 +94,21 @@ pub enum ConnectError {
     ServerChoseUnsupportedDialect,
     ServerError {
         code: NonZero<u32>,
-        body: error::ErrorResponse2,
+        body: ErrorResponse2,
     },
+}
+impl ServerError for ConnectError {
+    fn invalid_message() -> Self {
+        Self::InvalidMessage
+    }
+
+    fn io(io: std::io::Error) -> Self {
+        Self::Io(io)
+    }
+
+    fn parsed(code: NonZero<u32>, body: ErrorResponse2) -> Self {
+        Self::ServerError { code, body }
+    }
 }
 impl From<std::io::Error> for ConnectError {
     fn from(value: std::io::Error) -> Self {

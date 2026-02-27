@@ -1,9 +1,9 @@
-use std::cmp::Ordering;
+use std::{cmp::Ordering, io::ErrorKind, num::NonZero};
 
 #[derive(Debug)]
 pub struct ErrorResponse2(Box<[u8]>);
 impl ErrorResponse2 {
-    pub fn from_bytes(b: &[u8]) -> Result<Self, ParseError> {
+    fn from_bytes(b: &[u8]) -> Result<Self, ParseError> {
         let Some((structure_body, error_data)) = b
             .split_at_checked(8)
             .map(|(a, err)| (a.as_array::<8>().unwrap(), err))
@@ -27,9 +27,29 @@ impl ErrorResponse2 {
 }
 
 #[derive(Debug)]
-pub enum ParseError {
+enum ParseError {
     InvalidStructureSize,
     UnexpectedEof,
     ExcessTrailingBytes,
     ContextNotSupported,
+}
+
+pub trait ServerError: Sized {
+    fn invalid_message() -> Self;
+    fn io(io: std::io::Error) -> Self;
+    fn parsed(code: NonZero<u32>, body: ErrorResponse2) -> Self;
+    fn handle_error_body(code: NonZero<u32>, b: &[u8]) -> Self {
+        match ErrorResponse2::from_bytes(b) {
+            Ok(body) => Self::parsed(code, body),
+            Err(
+                ParseError::ContextNotSupported
+                | ParseError::ExcessTrailingBytes
+                | ParseError::InvalidStructureSize,
+            ) => Self::invalid_message(),
+            Err(ParseError::UnexpectedEof) => Self::io(std::io::Error::new(
+                ErrorKind::UnexpectedEof,
+                "error body ended early",
+            )),
+        }
+    }
 }
