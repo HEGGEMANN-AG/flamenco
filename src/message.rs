@@ -9,7 +9,7 @@ use crate::header::SyncHeader202;
 pub fn read_202_message<R: Read>(mut r: R) -> std::io::Result<(SyncHeader202, Box<[u8]>)> {
     let mut bios_size = [0u8; 4];
     r.read_exact(&mut bios_size)?;
-    let message_size = match u32::from_le_bytes(bios_size) {
+    let message_size = match u32::from_be_bytes(bios_size) {
         0..64 => {
             return Err(std::io::Error::new(
                 ErrorKind::UnexpectedEof,
@@ -40,7 +40,7 @@ pub fn write_202_message<W: Write, M: MessageBody>(
         0..=64 => unreachable!(),
         0x0100_0000.. => Err(Error::MessageTooLong),
         len => {
-            w.write_all(&(len as u32).to_le_bytes())
+            w.write_all(&(len as u32).to_be_bytes())
                 .map_err(Error::Connection)?;
             w.write_all(&buffer).map_err(Error::Connection)?;
             Ok(())
