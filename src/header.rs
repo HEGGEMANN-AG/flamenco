@@ -72,7 +72,7 @@ pub enum Error {
     InvalidCommand,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Command202 {
     Negotiate = 0x00,
     SessionSetup = 0x01,

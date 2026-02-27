@@ -1,13 +1,12 @@
+use crate::message::MessageBody;
 use std::io::Write;
 
-use crate::message::MessageBody;
-
+/// Negotiate request in SMB2020 must set client ID to 0
 #[derive(Debug)]
-pub struct NegotiateRequest202<'client> {
+pub struct NegotiateRequest202 {
     pub capabilities: u32,
-    pub client_guid: &'client [u8; 16],
 }
-impl NegotiateRequest202<'_> {
+impl NegotiateRequest202 {
     fn write_into<W: Write>(&self, mut w: W) -> Result<(), Error> {
         // structure size
         w.write_all(&36u16.to_le_bytes())?;
@@ -18,7 +17,7 @@ impl NegotiateRequest202<'_> {
         // Reserved
         w.write_all(&0u16.to_le_bytes())?;
         w.write_all(&self.capabilities.to_le_bytes())?;
-        w.write_all(self.client_guid.as_slice())?;
+        w.write_all(&[0u8; 16])?;
         // client start time
         w.write_all(&0u64.to_le_bytes())?;
         // dialect 202
@@ -27,7 +26,7 @@ impl NegotiateRequest202<'_> {
     }
 }
 
-impl MessageBody for NegotiateRequest202<'_> {
+impl MessageBody for NegotiateRequest202 {
     type Err = Error;
     fn write_to<W: Write>(&self, w: W) -> Result<(), Self::Err> {
         self.write_into(w)
