@@ -7,7 +7,9 @@ use crate::{
     ReadLe,
     error::{ErrorResponse2, ServerError},
     header::{Command202, SyncHeader202Outgoing},
-    message::{MessageBody, Validation, read_202_message, write_202_message},
+    message::{
+        MessageBody, Validation, WriteError as MsgWriteError, read_202_message, write_202_message,
+    },
     session::Session202,
 };
 
@@ -36,19 +38,19 @@ impl TreeConnection<'_, '_, '_> {
             .requires_signing()
             .then_some(session.session_key())
             .copied();
+        // TODO path length check
         write_202_message(
             &mut session.connection.tcp,
             session_key,
             tc_header,
             &TreeConnectRequest(path),
-        )
-        .unwrap();
+        )?;
         let (header, msg) =
             read_202_message(&mut session.connection.tcp, Validation::from(session_key)).unwrap();
         if let Some(code) = NonZero::new(header.status) {
             return Err(ServerError::handle_error_body(code, &msg));
         }
-        let response = TreeConnectResponse::read_from(Cursor::new(msg)).unwrap();
+        let response = TreeConnectResponse::read_from(Cursor::new(msg))?;
         Ok(TreeConnection {
             session,
             share_type: response.share_type,
@@ -87,6 +89,7 @@ impl Drop for TreeConnection<'_, '_, '_> {
 #[derive(Debug)]
 pub enum TreeConnectError {
     Io(std::io::Error),
+    PathTooLong,
     InvalidMessage,
     Server {
         code: NonZero<u32>,
@@ -102,6 +105,22 @@ impl ServerError for TreeConnectError {
     }
     fn parsed(code: NonZero<u32>, body: ErrorResponse2) -> Self {
         Self::Server { code, body }
+    }
+}
+impl From<MsgWriteError> for TreeConnectError {
+    fn from(value: MsgWriteError) -> Self {
+        match value {
+            MsgWriteError::Connection(io) => Self::Io(io),
+            MsgWriteError::MessageTooLong => Self::PathTooLong,
+        }
+    }
+}
+impl From<ReadError> for TreeConnectError {
+    fn from(value: ReadError) -> Self {
+        match value {
+            ReadError::Io(io) => Self::Io(io),
+            ReadError::InvalidSize | ReadError::InvalidShareType => Self::InvalidMessage,
+        }
     }
 }
 
