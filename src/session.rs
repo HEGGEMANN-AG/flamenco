@@ -126,10 +126,10 @@ impl Session202<'_, '_> {
     }
 }
 impl<'con, 'cred> Session202<'con, 'cred> {
-    pub fn tree_connect(
-        &mut self,
+    pub fn tree_connect<'session>(
+        &'session mut self,
         share_path: &str,
-    ) -> Result<TreeConnection<'con, 'cred>, TreeConnectError> {
+    ) -> Result<TreeConnection<'session, 'con, 'cred>, TreeConnectError> {
         TreeConnection::new(self, share_path)
     }
 }

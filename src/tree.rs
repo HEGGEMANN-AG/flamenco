@@ -11,15 +11,17 @@ use crate::{
     session::Session202,
 };
 
-pub struct TreeConnection<'con, 'cred> {
-    session: &'con mut Session202<'con, 'cred>,
+pub struct TreeConnection<'session, 'con, 'cred> {
+    session: &'session mut Session202<'con, 'cred>,
+    share_type: ShareType,
+    capabilities: u32,
     id: u32,
 }
-impl TreeConnection<'_, '_> {
-    pub fn new<'con, 'cred>(
-        session: &mut Session202<'con, 'cred>,
+impl TreeConnection<'_, '_, '_> {
+    pub fn new<'session, 'con, 'cred>(
+        session: &'session mut Session202<'con, 'cred>,
         path: &str,
-    ) -> Result<Self, TreeConnectError> {
+    ) -> Result<TreeConnection<'session, 'con, 'cred>, TreeConnectError> {
         let message_id = session.connection.fetch_increment_message_id();
         let tc_header = SyncHeader202Outgoing {
             command: Command202::TreeConnect,
@@ -47,14 +49,18 @@ impl TreeConnection<'_, '_> {
             return Err(ServerError::handle_error_body(code, &msg));
         }
         let response = TreeConnectResponse::read_from(Cursor::new(msg)).unwrap();
-        dbg!(response);
-        todo!()
+        Ok(TreeConnection {
+            session,
+            share_type: response.share_type,
+            capabilities: response.capabilities,
+            id: header.tree_id,
+        })
     }
     pub fn disconnect(self) {
         drop(self)
     }
 }
-impl Drop for TreeConnection<'_, '_> {
+impl Drop for TreeConnection<'_, '_, '_> {
     fn drop(&mut self) {
         let message_id = self.session.connection.fetch_increment_message_id();
         let header = SyncHeader202Outgoing {
