@@ -102,6 +102,7 @@ pub enum ReadError {
     Connection(std::io::Error),
 }
 
+/// Sets the SIGNED flag depending on the signing key being provided
 pub fn write_202_message<W: Write, M: MessageBody>(
     mut w: W,
     sign_with_key: Option<[u8; 16]>,
