@@ -1,4 +1,5 @@
 use std::{
+    fmt::Debug,
     io::{Cursor, ErrorKind, Read, Seek, SeekFrom, Write},
     num::NonZero,
 };
@@ -29,6 +30,17 @@ pub struct Session202<'con, 'cred> {
     pub(crate) id: u64,
     pub(crate) connection: &'con mut Connection<'con>,
     flags: SessionFlags,
+}
+impl Debug for Session202<'_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Session202")
+            .field("cred", &"Credentials")
+            .field("session_key", &"REDACTED")
+            .field("id", &self.id)
+            .field("connection", &self.connection)
+            .field("flags", &self.flags)
+            .finish()
+    }
 }
 impl Session202<'_, '_> {
     pub fn requires_signing(&self) -> bool {

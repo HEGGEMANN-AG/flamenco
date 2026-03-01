@@ -14,6 +14,7 @@ use crate::{
     share_name::{InvalidShareName, ShareName},
 };
 
+#[derive(Debug)]
 pub struct TreeConnection<'session, 'con, 'cred> {
     session: &'session mut Session202<'con, 'cred>,
     share_type: ShareType,

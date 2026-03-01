@@ -87,6 +87,7 @@ impl Client202 {
     }
 }
 
+#[derive(Debug)]
 pub struct Connection<'client> {
     pub(crate) client: &'client Client202,
     message_id: u64,
