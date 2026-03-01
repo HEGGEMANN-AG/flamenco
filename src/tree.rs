@@ -15,18 +15,18 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub struct TreeConnection<'session, 'con, 'cred> {
-    session: &'session mut Session202<'con, 'cred>,
+pub struct TreeConnection<'client, 'con, 'cred, 'session> {
+    session: &'session mut Session202<'client, 'con, 'cred>,
     share_type: ShareType,
     /// There are no valid flags in 202 besides the SMB2_SHARE_CAP_DFS
     dfs_capability: bool,
     id: u32,
 }
-impl TreeConnection<'_, '_, '_> {
-    pub fn new<'session, 'con, 'cred>(
-        session: &'session mut Session202<'con, 'cred>,
+impl TreeConnection<'_, '_, '_, '_> {
+    pub fn new<'client, 'con, 'cred, 'session>(
+        session: &'session mut Session202<'client, 'con, 'cred>,
         path: &str,
-    ) -> Result<TreeConnection<'session, 'con, 'cred>, TreeConnectError> {
+    ) -> Result<TreeConnection<'client, 'con, 'cred, 'session>, TreeConnectError> {
         let tc_header = SyncHeader202Outgoing::from_session(session, Command202::TreeConnect);
         let session_key = session
             .requires_signing()
@@ -59,15 +59,15 @@ impl TreeConnection<'_, '_, '_> {
         drop(self)
     }
 }
-impl<'session, 'con, 'cred> TreeConnection<'session, 'con, 'cred> {
-    pub(crate) fn session_mut(&mut self) -> &mut Session202<'con, 'cred> {
+impl<'client, 'con, 'cred, 'session> TreeConnection<'client, 'con, 'cred, 'session> {
+    pub(crate) fn session_mut(&mut self) -> &mut Session202<'client, 'con, 'cred> {
         self.session
     }
     pub fn id(&self) -> u32 {
         self.id
     }
 }
-impl Drop for TreeConnection<'_, '_, '_> {
+impl Drop for TreeConnection<'_, '_, '_, '_> {
     fn drop(&mut self) {
         let header = SyncHeader202Outgoing::from_tree_con(self, Command202::TreeDisconnect);
         let session = &mut self.session;

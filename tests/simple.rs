@@ -16,6 +16,6 @@ fn main() {
     let mut session = con
         .setup_session(&credentials, target_spn.as_deref())
         .unwrap();
-    let _tree = session.tree_connect(&share_path);
+    let _tree = session.tree_connect(&share_path).unwrap();
     std::thread::sleep(Duration::from_millis(200));
 }

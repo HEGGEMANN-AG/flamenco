@@ -107,12 +107,12 @@ impl Connection<'_> {
         self.server_requires_signing
     }
 }
-impl<'con> Connection<'con> {
-    pub fn setup_session<'cred>(
+impl<'client> Connection<'client> {
+    pub fn setup_session<'con, 'cred>(
         &'con mut self,
         credentials: &'cred Credentials<Outbound>,
         target_spn: Option<&str>,
-    ) -> Result<Session202<'con, 'cred>, SessionSetupError> {
+    ) -> Result<Session202<'client, 'con, 'cred>, SessionSetupError> {
         Session202::new(self, credentials, target_spn)
     }
 }

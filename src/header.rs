@@ -17,7 +17,7 @@ pub struct SyncHeader202Outgoing {
     pub session_id: u64,
 }
 impl SyncHeader202Outgoing {
-    pub fn from_session(session: &mut Session202<'_, '_>, command: Command202) -> Self {
+    pub fn from_session(session: &mut Session202<'_, '_, '_>, command: Command202) -> Self {
         let message_id = session.connection.fetch_increment_message_id();
         Self {
             command,
@@ -33,7 +33,10 @@ impl SyncHeader202Outgoing {
             session_id: session.id,
         }
     }
-    pub fn from_tree_con(tree_con: &mut TreeConnection<'_, '_, '_>, command: Command202) -> Self {
+    pub fn from_tree_con(
+        tree_con: &mut TreeConnection<'_, '_, '_, '_>,
+        command: Command202,
+    ) -> Self {
         let mut header = Self::from_session(tree_con.session_mut(), command);
         header.tree_id = tree_con.id();
         header

@@ -2,6 +2,7 @@ use std::io::Read;
 
 pub mod client;
 mod error;
+pub mod file;
 mod header;
 mod message;
 mod negotiate;
