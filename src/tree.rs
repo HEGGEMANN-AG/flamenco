@@ -141,7 +141,7 @@ fn parse_share_path(s: &str) -> Result<(&str, ShareName), InvalidSharePath> {
     let Some((server_name, share_name)) = without_double_slashes.split_once('\\') else {
         return Err(InvalidSharePath::MissingSeparator);
     };
-    if server_name.chars().count() > 256 {
+    if server_name.chars().count() > 255 {
         return Err(InvalidSharePath::ServerNameTooLong);
     };
     let share_name = ShareName::new(share_name).map_err(InvalidSharePath::InvalidShareName)?;
