@@ -11,6 +11,7 @@ use crate::{
         MessageBody, Validation, WriteError as MsgWriteError, read_202_message, write_202_message,
     },
     session::Session202,
+    share_name::{InvalidShareName, ShareName},
 };
 
 pub struct TreeConnection<'session, 'con, 'cred> {
@@ -39,7 +40,9 @@ impl TreeConnection<'_, '_, '_> {
             .requires_signing()
             .then_some(session.session_key())
             .copied();
-        // TODO path length and invalid characters check
+        if let Err(e) = parse_share_path(path) {
+            return Err(TreeConnectError::InvalidPath(e));
+        };
         write_202_message(
             &mut session.connection.tcp,
             session_key,
@@ -96,7 +99,7 @@ impl Drop for TreeConnection<'_, '_, '_> {
 #[derive(Debug)]
 pub enum TreeConnectError {
     Io(std::io::Error),
-    PathTooLong,
+    InvalidPath(InvalidSharePath),
     InvalidMessage,
     Server {
         code: NonZero<u32>,
@@ -118,7 +121,7 @@ impl From<MsgWriteError> for TreeConnectError {
     fn from(value: MsgWriteError) -> Self {
         match value {
             MsgWriteError::Connection(io) => Self::Io(io),
-            MsgWriteError::MessageTooLong => Self::PathTooLong,
+            MsgWriteError::MessageTooLong => unreachable!("share path limit already enforces this"),
         }
     }
 }
@@ -129,6 +132,27 @@ impl From<ReadError> for TreeConnectError {
             ReadError::InvalidSize | ReadError::InvalidShareType => Self::InvalidMessage,
         }
     }
+}
+
+fn parse_share_path(s: &str) -> Result<(&str, ShareName), InvalidSharePath> {
+    let Some(without_double_slashes) = s.strip_prefix(r"\\") else {
+        return Err(InvalidSharePath::NoLeadingSlashes);
+    };
+    let Some((server_name, share_name)) = without_double_slashes.split_once('\\') else {
+        return Err(InvalidSharePath::MissingSeparator);
+    };
+    if server_name.chars().count() > 256 {
+        return Err(InvalidSharePath::ServerNameTooLong);
+    };
+    let share_name = ShareName::new(share_name).map_err(InvalidSharePath::InvalidShareName)?;
+    Ok((server_name, share_name))
+}
+#[derive(Debug)]
+pub enum InvalidSharePath {
+    NoLeadingSlashes,
+    MissingSeparator,
+    ServerNameTooLong,
+    InvalidShareName(InvalidShareName),
 }
 
 #[derive(Debug)]

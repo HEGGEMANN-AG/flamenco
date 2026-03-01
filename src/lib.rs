@@ -6,6 +6,7 @@ mod header;
 mod message;
 mod negotiate;
 mod session;
+mod share_name;
 mod sign;
 mod tree;
 
