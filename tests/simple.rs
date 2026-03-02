@@ -16,6 +16,7 @@ fn main() {
     let mut session = con
         .setup_session(&credentials, target_spn.as_deref())
         .unwrap();
-    let _tree = session.tree_connect(&share_path).unwrap();
+    let mut tree = session.tree_connect(&share_path).unwrap();
+    let _file = tree.open_file("21_Softwareentwicklung\\smb-test.txt");
     std::thread::sleep(Duration::from_millis(200));
 }

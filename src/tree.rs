@@ -6,6 +6,7 @@ use std::{
 use crate::{
     ReadLe,
     error::{ErrorResponse2, ServerError},
+    file::{FileHandle, OpenError},
     header::{Command202, SyncHeader202Outgoing},
     message::{
         MessageBody, Validation, WriteError as MsgWriteError, read_202_message, write_202_message,
@@ -66,6 +67,12 @@ impl<'client, 'con, 'cred, 'session> TreeConnection<'client, 'con, 'cred, 'sessi
     pub fn id(&self) -> u32 {
         self.id
     }
+    pub fn open_file<'tree>(
+        &'tree mut self,
+        path: &str,
+    ) -> Result<FileHandle<'client, 'con, 'cred, 'session, 'tree>, OpenError> {
+        FileHandle::new(self, path)
+    }
 }
 impl Drop for TreeConnection<'_, '_, '_, '_> {
     fn drop(&mut self) {
@@ -101,9 +108,6 @@ impl ServerError for TreeConnectError {
     fn invalid_message() -> Self {
         Self::InvalidMessage
     }
-    fn io(io: std::io::Error) -> Self {
-        Self::Io(io)
-    }
     fn parsed(code: NonZero<u32>, body: ErrorResponse2) -> Self {
         Self::Server { code, body }
     }
@@ -114,6 +118,11 @@ impl From<MsgWriteError> for TreeConnectError {
             MsgWriteError::Connection(io) => Self::Io(io),
             MsgWriteError::MessageTooLong => unreachable!("share path limit already enforces this"),
         }
+    }
+}
+impl From<std::io::Error> for TreeConnectError {
+    fn from(value: std::io::Error) -> Self {
+        Self::Io(value)
     }
 }
 impl From<ReadError> for TreeConnectError {
@@ -153,11 +162,7 @@ impl TreeConnectRequest<'_> {
     fn write_into<W: Write>(&self, mut w: W) -> Result<(), WriteError> {
         w.write_all(&Self::STRUCTURE_SIZE.to_le_bytes())?;
         w.write_all(&0u16.to_le_bytes())?;
-        let utf16 = self
-            .0
-            .encode_utf16()
-            .flat_map(|c| c.to_le_bytes())
-            .collect::<Vec<_>>();
+        let utf16 = crate::to_wide(self.0);
         w.write_all(&(64 + 8u16).to_le_bytes())?;
         w.write_all(&(utf16.len() as u16).to_le_bytes())?;
         w.write_all(&utf16)?;

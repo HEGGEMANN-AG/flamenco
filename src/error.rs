@@ -34,9 +34,8 @@ enum ParseError {
     ContextNotSupported,
 }
 
-pub trait ServerError: Sized {
+pub trait ServerError: Sized + From<std::io::Error> {
     fn invalid_message() -> Self;
-    fn io(io: std::io::Error) -> Self;
     fn parsed(code: NonZero<u32>, body: ErrorResponse2) -> Self;
     fn handle_error_body(code: NonZero<u32>, b: &[u8]) -> Self {
         match ErrorResponse2::from_bytes(b) {
@@ -46,7 +45,7 @@ pub trait ServerError: Sized {
                 | ParseError::ExcessTrailingBytes
                 | ParseError::InvalidStructureSize,
             ) => Self::invalid_message(),
-            Err(ParseError::UnexpectedEof) => Self::io(std::io::Error::new(
+            Err(ParseError::UnexpectedEof) => Self::from(std::io::Error::new(
                 ErrorKind::UnexpectedEof,
                 "error body ended early",
             )),

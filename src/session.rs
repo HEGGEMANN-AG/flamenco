@@ -229,11 +229,13 @@ impl ServerError for SessionSetupError {
     fn invalid_message() -> Self {
         Self::InvalidMessage
     }
-    fn io(io: std::io::Error) -> Self {
-        Self::Io(io)
-    }
     fn parsed(code: NonZero<u32>, body: ErrorResponse2) -> Self {
         Self::ServerError { code, body }
+    }
+}
+impl From<std::io::Error> for SessionSetupError {
+    fn from(value: std::io::Error) -> Self {
+        Self::Io(value)
     }
 }
 
