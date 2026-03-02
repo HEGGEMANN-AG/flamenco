@@ -23,6 +23,7 @@ mod read;
 pub struct FileHandle<'client, 'con, 'cred, 'session, 'tree> {
     tree_connection: &'tree mut TreeConnection<'client, 'con, 'cred, 'session>,
     id: FileId,
+    oplock_level: Option<OplockLevel202>,
     allocation_size: u64,
     end_of_file: u64,
     creation_time: u64,
@@ -38,7 +39,7 @@ impl FileHandle<'_, '_, '_, '_, '_> {
         let header = SyncHeader202Outgoing::from_tree_con(tree_connection, Command202::Create);
         let request_body = FileCreateRequest {
             oplock_level: None,
-            impersonation_level: ImpersonationLevel::Identification,
+            impersonation_level: ImpersonationLevel::Impersonation,
             desired_access: AccessMask::READ_DATA,
             file_attributes: 0,
             share_access: ShareAccess::SHARE_READ,
@@ -69,6 +70,7 @@ impl FileHandle<'_, '_, '_, '_, '_> {
             id,
         } = CreateResponse::read_from(body.as_ref()).unwrap();
         Ok(dbg!(FileHandle {
+            oplock_level,
             tree_connection,
             id,
             allocation_size,
@@ -109,7 +111,7 @@ impl FileHandle<'_, '_, '_, '_, '_> {
         let (header, body) =
             read_202_message(&mut session.connection.tcp, Validation::from(key)).unwrap();
         if let Some(code) = NonZero::new(header.status) {
-            return Err(ServerError::handle_error_body(dbg!(code), &body));
+            return Err(ServerError::handle_error_body(code, &body));
         }
         let buffer = ReadResponse::read_from(Cursor::new(body))
             .unwrap()
@@ -183,7 +185,7 @@ impl FileCreateRequest<'_> {
         w.write_all(&self.share_access.0.to_le_bytes())?;
         w.write_all(&self.create_disposition.to_u32().to_le_bytes())?;
         // TODO create options
-        w.write_all(&0u32.to_le_bytes())?;
+        w.write_all(&0x40u32.to_le_bytes())?;
         let path = crate::to_wide(self.path);
         let offset: u16 = 64 + 56;
         w.write_all(&offset.to_le_bytes())?;
