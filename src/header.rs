@@ -34,17 +34,20 @@ impl SyncHeader202Outgoing {
         }
     }
     pub fn from_tree_con(tree_con: &mut TreeConnection<'_, '_, '_>, command: Command202) -> Self {
-        let mut header = Self::from_session(tree_con.session_mut(), command);
-        header.tree_id = tree_con.id();
-        header
+        let header = Self::from_session(tree_con.session_mut(), command);
+        Self {
+            tree_id: tree_con.id(),
+            ..header
+        }
     }
     pub fn to_bytes(&self) -> [u8; 64] {
         let mut bytes = [0u8; 64];
         bytes[0..4].copy_from_slice(&PROTOCOL_ID);
         bytes[4..6].copy_from_slice(&64u16.to_le_bytes());
         // credit charge and status is already 0
+        bytes[6..8].copy_from_slice(&1u16.to_le_bytes());
         bytes[12..14].copy_from_slice(&self.command.as_u16().to_le_bytes());
-        bytes[14..16].copy_from_slice(&self.credits.to_le_bytes());
+        bytes[14..16].copy_from_slice(&1u16.to_le_bytes());
         bytes[16..20].copy_from_slice(&self.flags.to_le_bytes());
         bytes[20..24].copy_from_slice(&self.next_command.map_or(0, |n| n.get()).to_le_bytes());
         bytes[24..32].copy_from_slice(&self.message_id.to_le_bytes());

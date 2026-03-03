@@ -38,11 +38,15 @@ impl FileHandle<'_, '_, '_, '_> {
     ) -> Result<FileHandle<'client, 'con, 'session, 'tree>, OpenError> {
         let header = SyncHeader202Outgoing::from_tree_con(tree_connection, Command202::Create);
         let request_body = FileCreateRequest {
-            oplock_level: None,
+            oplock_level: Some(OplockLevel202::Batch),
             impersonation_level: ImpersonationLevel::Impersonation,
-            desired_access: AccessMask::READ_DATA,
-            file_attributes: 0,
-            share_access: ShareAccess::SHARE_READ,
+            desired_access: AccessMask::READ_DATA
+                | AccessMask::READ_ATTRIBUTES
+                | AccessMask::READ_EA
+                | AccessMask::READ_CONTROL,
+            file_attributes: 0x0,
+            create_options: 0x40 | 0x200 | 0x800,
+            share_access: ShareAccess::SHARE_READ | ShareAccess::SHARE_WRITE,
             create_disposition: CreateDisposition::Open,
             path,
         };
@@ -87,9 +91,7 @@ impl FileHandle<'_, '_, '_, '_> {
         length: u32,
         minimum_count: u32,
     ) -> Result<Box<[u8]>, ReadFileError> {
-        let mut header =
-            SyncHeader202Outgoing::from_tree_con(self.tree_connection, Command202::Read);
-        header.credits = 1;
+        let header = SyncHeader202Outgoing::from_tree_con(self.tree_connection, Command202::Read);
         let session = self.tree_connection.session_mut();
         let key = session
             .requires_signing()
@@ -157,6 +159,7 @@ struct FileCreateRequest<'p> {
     file_attributes: u32,
     share_access: ShareAccess,
     create_disposition: CreateDisposition,
+    create_options: u32,
     path: &'p str,
 }
 impl FileCreateRequest<'_> {
@@ -184,7 +187,7 @@ impl FileCreateRequest<'_> {
         w.write_all(&self.share_access.0.to_le_bytes())?;
         w.write_all(&self.create_disposition.to_u32().to_le_bytes())?;
         // TODO create options
-        w.write_all(&0x40u32.to_le_bytes())?;
+        w.write_all(&self.create_options.to_le_bytes())?;
         let path = crate::to_wide(self.path);
         let offset: u16 = 64 + 56;
         w.write_all(&offset.to_le_bytes())?;
@@ -414,6 +417,6 @@ enum CreateActionTaken {
 
 #[derive(Clone, Copy, Debug)]
 pub struct FileId {
-    persistent: u64,
-    volatile: u64,
+    persistent: [u8; 8],
+    volatile: [u8; 8],
 }
