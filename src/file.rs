@@ -163,20 +163,20 @@ impl FileCreateRequest<'_> {
     fn write_into<W: Write>(&self, mut w: W) -> Result<(), std::io::Error> {
         w.write_all(&57u16.to_le_bytes())?;
         w.write_all(&[0])?;
-        let oplock_byte = match self.oplock_level {
+        let oplock_byte: u8 = match self.oplock_level {
             None => 0x00,
             Some(OplockLevel202::II) => 0x01,
             Some(OplockLevel202::Exclusive) => 0x08,
             Some(OplockLevel202::Batch) => 0x09,
         };
         w.write_all(&[oplock_byte])?;
-        let imp_byte = match self.impersonation_level {
+        let imp_byte: u8 = match self.impersonation_level {
             ImpersonationLevel::Anonymous => 0x00,
             ImpersonationLevel::Identification => 0x01,
             ImpersonationLevel::Impersonation => 0x02,
             ImpersonationLevel::Delegate => 0x03,
         };
-        w.write_all(&(imp_byte as u32).to_le_bytes())?;
+        w.write_all(&u32::from(imp_byte).to_le_bytes())?;
         w.write_all(&0u64.to_le_bytes())?;
         w.write_all(&0u64.to_le_bytes())?;
         w.write_all(&self.desired_access.0.to_le_bytes())?;
@@ -189,8 +189,8 @@ impl FileCreateRequest<'_> {
         let offset: u16 = 64 + 56;
         w.write_all(&offset.to_le_bytes())?;
         w.write_all(&(path.len() as u16).to_le_bytes())?;
-        // todo create contexts
-        w.write_all(&0u32.to_le_bytes())?;
+        let create_contexts_offset: u32 = 0;
+        w.write_all(&create_contexts_offset.to_le_bytes())?;
         w.write_all(&0u32.to_le_bytes())?;
         w.write_all(&path)?;
         Ok(())
@@ -348,6 +348,7 @@ impl CreateResponse {
             0x09 => Some(OplockLevel202::Batch),
             _ => return Err(ReadError::InvalidOplockLevel),
         };
+        // flags
         r.read_exact(&mut [0])?;
         let create_action = match r.read_u32()? {
             0x00 => CreateActionTaken::Superseded,
@@ -364,14 +365,18 @@ impl CreateResponse {
         let end_of_file = r.read_u64()?;
         let attributes = r.read_u32()?;
         let _ = r.read_u32()?;
-        let persistent = r.read_u64()?;
-        let volatile = r.read_u64()?;
+        let mut persistent = [0u8; 8];
+        r.read_exact(&mut persistent)?;
+        let mut volatile = [0u8; 8];
+        r.read_exact(&mut volatile)?;
         let id = FileId {
             persistent,
             volatile,
         };
         let create_contexts_offset = r.read_u32()?;
         let create_contexts_length = r.read_u32()?;
+        let mut _ctx = vec![0; (create_contexts_length + create_contexts_offset) as usize];
+        r.read_exact(&mut _ctx)?;
         Ok(CreateResponse {
             oplock_level,
             create_action,

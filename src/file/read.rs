@@ -29,8 +29,8 @@ impl ReadRequest {
             persistent,
             volatile,
         } = self.id;
-        w.write_all(&persistent.to_le_bytes())?;
-        w.write_all(&volatile.to_le_bytes())?;
+        w.write_all(&persistent)?;
+        w.write_all(&volatile)?;
         w.write_all(&self.minimum_count.to_le_bytes())?;
         // Channel
         w.write_all(&0u32.to_le_bytes())?;

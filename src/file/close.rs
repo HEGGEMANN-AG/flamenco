@@ -15,8 +15,8 @@ impl CloseRequest {
             persistent,
             volatile,
         } = self.id;
-        w.write_all(&persistent.to_le_bytes())?;
-        w.write_all(&volatile.to_le_bytes())?;
+        w.write_all(&persistent)?;
+        w.write_all(&volatile)?;
         Ok(())
     }
 }
