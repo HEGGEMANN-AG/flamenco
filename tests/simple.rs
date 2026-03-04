@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::{io::Read, rc::Rc, sync::Arc};
 
 use kenobi::cred::Credentials;
 
@@ -13,9 +13,9 @@ fn main() {
     let target_spn = std::env::var("FLAMENCO_TEST_TARGET_SPN").ok();
     let share_path = std::env::var("FLAMENCO_TEST_SHARE_PATH").unwrap();
     let file_path = std::env::var("FLAMENCO_TEST_FILE").unwrap();
-    let client = Client202::new(true);
+    let client = Arc::new(Client202::new(true));
     let credentials = Credentials::new(own_spn.as_deref()).unwrap();
-    let mut con = client.connect(server).unwrap();
+    let mut con = Client202::connect_with(client, server).unwrap();
     let mut session = con
         .setup_session(&credentials, target_spn.as_deref())
         .unwrap();

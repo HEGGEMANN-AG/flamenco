@@ -6,6 +6,7 @@ use std::{
 
 use crate::{
     ReadLe,
+    client::Client202,
     error::{ErrorResponse2, ServerError},
     file::{
         close::{CloseRequest, CloseResponse},
@@ -23,8 +24,8 @@ mod close;
 mod read;
 
 #[derive(Debug)]
-pub struct FileHandle<'client, 'con, 'session, 'tree> {
-    tree_connection: &'tree mut TreeConnection<'client, 'con, 'session>,
+pub struct FileHandle<'con, 'session, 'tree, CL> {
+    tree_connection: &'tree mut TreeConnection<'con, 'session, CL>,
     id: FileId,
     oplock_level: Option<OplockLevel202>,
     offset: u64,
@@ -35,11 +36,11 @@ pub struct FileHandle<'client, 'con, 'session, 'tree> {
     last_write_time: u64,
     change_time: u64,
 }
-impl FileHandle<'_, '_, '_, '_> {
+impl<CL> FileHandle<'_, '_, '_, CL> {
     pub(crate) fn new<'tree, 'client, 'con, 'session>(
-        tree_connection: &'tree mut TreeConnection<'client, 'con, 'session>,
+        tree_connection: &'tree mut TreeConnection<'con, 'session, CL>,
         path: &str,
-    ) -> Result<FileHandle<'client, 'con, 'session, 'tree>, OpenError> {
+    ) -> Result<FileHandle<'con, 'session, 'tree, CL>, OpenError> {
         let header = SyncHeader202Outgoing::from_tree_con(tree_connection, Command202::Create);
         let request_body = FileCreateRequest {
             oplock_level: Some(OplockLevel202::Batch),
@@ -168,12 +169,12 @@ impl FileHandle<'_, '_, '_, '_> {
         self.send_close()
     }
 }
-impl Drop for FileHandle<'_, '_, '_, '_> {
+impl<CL> Drop for FileHandle<'_, '_, '_, CL> {
     fn drop(&mut self) {
         let _ = self.send_close();
     }
 }
-impl Read for FileHandle<'_, '_, '_, '_> {
+impl<CL> Read for FileHandle<'_, '_, '_, CL> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let until_end = (self.end_of_file - self.offset)
             .try_into()
@@ -205,7 +206,7 @@ impl Read for FileHandle<'_, '_, '_, '_> {
         }
     }
 }
-impl Seek for FileHandle<'_, '_, '_, '_> {
+impl<CL> Seek for FileHandle<'_, '_, '_, CL> {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
         let new = match pos {
             SeekFrom::Start(s) => s,

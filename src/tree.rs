@@ -1,10 +1,12 @@
 use std::{
+    borrow::Borrow,
     io::{Cursor, Read, Seek, Write},
     num::NonZero,
 };
 
 use crate::{
     ReadLe,
+    client::Client202,
     error::{ErrorResponse2, ServerError},
     file::{FileHandle, OpenError},
     header::{Command202, SyncHeader202Outgoing},
@@ -16,18 +18,18 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub struct TreeConnection<'client, 'con, 'session> {
-    session: &'session mut Session202<'client, 'con>,
+pub struct TreeConnection<'con, 'session, CL> {
+    session: &'session mut Session202<'con, CL>,
     share_type: ShareType,
     /// There are no valid flags in 202 besides the SMB2_SHARE_CAP_DFS
     dfs_capability: bool,
     id: u32,
 }
-impl TreeConnection<'_, '_, '_> {
-    pub fn new<'client, 'con, 'session>(
-        session: &'session mut Session202<'client, 'con>,
+impl<CL: Borrow<Client202>> TreeConnection<'_, '_, CL> {
+    pub fn new<'con, 'session>(
+        session: &'session mut Session202<'con, CL>,
         path: &str,
-    ) -> Result<TreeConnection<'client, 'con, 'session>, TreeConnectError> {
+    ) -> Result<TreeConnection<'con, 'session, CL>, TreeConnectError> {
         let tc_header = SyncHeader202Outgoing::from_session(session, Command202::TreeConnect);
         let session_key = session
             .requires_signing()
@@ -61,21 +63,23 @@ impl TreeConnection<'_, '_, '_> {
         drop(self)
     }
 }
-impl<'client, 'con, 'session> TreeConnection<'client, 'con, 'session> {
-    pub(crate) fn session_mut(&mut self) -> &mut Session202<'client, 'con> {
+impl<'con, 'session, CL> TreeConnection<'con, 'session, CL> {
+    pub(crate) fn session_mut(&mut self) -> &mut Session202<'con, CL> {
         self.session
     }
     pub fn id(&self) -> u32 {
         self.id
     }
+}
+impl<'con, 'session, CL> TreeConnection<'con, 'session, CL> {
     pub fn open_file<'tree>(
         &'tree mut self,
         path: &str,
-    ) -> Result<FileHandle<'client, 'con, 'session, 'tree>, OpenError> {
+    ) -> Result<FileHandle<'con, 'session, 'tree, CL>, OpenError> {
         FileHandle::new(self, path)
     }
 }
-impl Drop for TreeConnection<'_, '_, '_> {
+impl<CL> Drop for TreeConnection<'_, '_, CL> {
     fn drop(&mut self) {
         let header = SyncHeader202Outgoing::from_tree_con(self, Command202::TreeDisconnect);
         let session = &mut self.session;

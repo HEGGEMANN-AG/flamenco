@@ -1,4 +1,5 @@
 use std::{
+    borrow::Borrow,
     io::Cursor,
     net::{TcpStream, ToSocketAddrs},
     num::NonZero,
@@ -37,7 +38,16 @@ impl Client202 {
             ..Default::default()
         }
     }
-    pub fn connect(&self, addr: impl ToSocketAddrs) -> Result<Connection<'_>, ConnectError> {
+    pub fn connect(
+        &self,
+        addr: impl ToSocketAddrs,
+    ) -> Result<Connection<&Client202>, ConnectError> {
+        Client202::connect_with(self, addr)
+    }
+    pub fn connect_with<CL: Borrow<Self>>(
+        client: CL,
+        addr: impl ToSocketAddrs,
+    ) -> Result<Connection<CL>, ConnectError> {
         let mut tcp = TcpStream::connect(addr)?;
         let neg_header = SyncHeader202Outgoing {
             command: Command202::Negotiate,
@@ -76,7 +86,7 @@ impl Client202 {
         }
 
         Ok(Connection {
-            client: self,
+            client,
             message_id: 1,
             tcp,
             max_transact_size: neg_resp.max_transact_size,
@@ -88,8 +98,8 @@ impl Client202 {
 }
 
 #[derive(Debug)]
-pub struct Connection<'client> {
-    pub(crate) client: &'client Client202,
+pub struct Connection<CL> {
+    pub(crate) client: CL,
     message_id: u64,
     pub(crate) tcp: TcpStream,
     max_transact_size: u32,
@@ -97,7 +107,7 @@ pub struct Connection<'client> {
     max_write_size: u32,
     server_requires_signing: bool,
 }
-impl Connection<'_> {
+impl<CL> Connection<CL> {
     pub(crate) fn fetch_increment_message_id(&mut self) -> u64 {
         let num = self.message_id;
         self.message_id += 1;
@@ -107,12 +117,12 @@ impl Connection<'_> {
         self.server_requires_signing
     }
 }
-impl<'client> Connection<'client> {
+impl<CL: Borrow<Client202>> Connection<CL> {
     pub fn setup_session<'con>(
         &'con mut self,
         credentials: &Credentials<Outbound>,
         target_spn: Option<&str>,
-    ) -> Result<Session202<'client, 'con>, SessionSetupError> {
+    ) -> Result<Session202<'con, CL>, SessionSetupError> {
         Session202::new(self, credentials, target_spn)
     }
 }
