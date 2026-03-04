@@ -98,7 +98,7 @@ pub struct Connection<'client> {
     server_requires_signing: bool,
 }
 impl Connection<'_> {
-    pub fn fetch_increment_message_id(&mut self) -> u64 {
+    pub(crate) fn fetch_increment_message_id(&mut self) -> u64 {
         let num = self.message_id;
         self.message_id += 1;
         num
