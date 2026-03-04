@@ -1,7 +1,7 @@
 use std::{
     io::{Cursor, Read, Seek, SeekFrom, Write},
     num::NonZero,
-    ops::BitOr,
+    ops::{BitOr, Deref, DerefMut},
 };
 
 use crate::{
@@ -60,16 +60,10 @@ impl<CL> FileHandle<'_, '_, '_, CL> {
             .requires_signing()
             .then_some(session.session_key())
             .copied();
-        write_202_message(
-            &mut session.connection.tcp,
-            key,
-            header,
-            &request_body,
-            false,
-        )
-        .unwrap();
-        let (header, body) =
-            read_202_message(&mut session.connection.tcp, Validation::from(key)).unwrap();
+        let mut lock = session.connection.borrow_tcp();
+        write_202_message(lock.deref_mut(), key, header, &request_body, false).unwrap();
+        let (header, body) = read_202_message(lock.deref_mut(), Validation::from(key)).unwrap();
+        drop(lock);
         if let Some(code) = NonZero::new(header.status) {
             return Err(ServerError::handle_error_body(code, &body));
         }
@@ -109,8 +103,9 @@ impl<CL> FileHandle<'_, '_, '_, CL> {
             .requires_signing()
             .then_some(session.session_key())
             .copied();
+        let mut lock = session.connection.borrow_tcp();
         write_202_message(
-            &mut session.connection.tcp,
+            lock.deref_mut(),
             key,
             header,
             &ReadRequest {
@@ -125,14 +120,15 @@ impl<CL> FileHandle<'_, '_, '_, CL> {
             WriteError::Connection(io) => ReadFileError::Io(io),
             WriteError::MessageTooLong => ReadFileError::InvalidMessage,
         })?;
-        let (header, body) = read_202_message(&mut session.connection.tcp, Validation::from(key))
-            .map_err(|e| match e {
-            MsgReadError::NetBIOS
-            | MsgReadError::NotSigned
-            | MsgReadError::InvalidSignature
-            | MsgReadError::InvalidlySignedMessage => ReadFileError::InvalidMessage,
-            MsgReadError::Connection(io) => ReadFileError::Io(io),
-        })?;
+        let (header, body) =
+            read_202_message(lock.deref_mut(), Validation::from(key)).map_err(|e| match e {
+                MsgReadError::NetBIOS
+                | MsgReadError::NotSigned
+                | MsgReadError::InvalidSignature
+                | MsgReadError::InvalidlySignedMessage => ReadFileError::InvalidMessage,
+                MsgReadError::Connection(io) => ReadFileError::Io(io),
+            })?;
+        drop(lock);
         if let Some(code) = NonZero::new(header.status) {
             return Err(ServerError::handle_error_body(code, &body));
         }
@@ -149,8 +145,9 @@ impl<CL> FileHandle<'_, '_, '_, CL> {
             .requires_signing()
             .then_some(session.session_key())
             .copied();
+        let mut lock = session.connection.borrow_tcp();
         write_202_message(
-            &mut session.connection.tcp,
+            lock.deref_mut(),
             session_key,
             header,
             &CloseRequest { id: self.id },
@@ -158,7 +155,8 @@ impl<CL> FileHandle<'_, '_, '_, CL> {
         )
         .unwrap();
         let (header, body) =
-            read_202_message(&mut session.connection.tcp, Validation::from(session_key)).unwrap();
+            read_202_message(lock.deref_mut(), Validation::from(session_key)).unwrap();
+        drop(lock);
         if let Some(code) = NonZero::new(header.status) {
             panic!("Error with code {code}");
         }

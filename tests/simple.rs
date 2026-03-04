@@ -1,4 +1,4 @@
-use std::{io::Read, rc::Rc, sync::Arc};
+use std::{io::Read, sync::Arc};
 
 use kenobi::cred::Credentials;
 
@@ -16,13 +16,16 @@ fn main() {
     let client = Arc::new(Client202::new(true));
     let credentials = Credentials::new(own_spn.as_deref()).unwrap();
     let mut con = Client202::connect_with(client, server).unwrap();
-    let mut session = con
-        .setup_session(&credentials, target_spn.as_deref())
-        .unwrap();
-    let mut tree = session.tree_connect(&share_path).unwrap();
-    let mut file = tree.open_file(&file_path).unwrap();
-    let mut buf = Vec::new();
-    file.read_to_end(&mut buf).unwrap();
-    dbg!(String::from_utf8(buf).unwrap());
-    std::thread::sleep(Duration::from_millis(200));
+    let t = std::thread::spawn(move || {
+        let mut session = con
+            .setup_session(&credentials, target_spn.as_deref())
+            .unwrap();
+        let mut tree = session.tree_connect(&share_path).unwrap();
+        let mut file = tree.open_file(&file_path).unwrap();
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf).unwrap();
+        dbg!(String::from_utf8(buf).unwrap());
+        std::thread::sleep(Duration::from_millis(200));
+    });
+    t.join().unwrap();
 }

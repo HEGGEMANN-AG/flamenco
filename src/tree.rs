@@ -2,6 +2,7 @@ use std::{
     borrow::Borrow,
     io::{Cursor, Read, Seek, Write},
     num::NonZero,
+    ops::DerefMut,
 };
 
 use crate::{
@@ -38,15 +39,17 @@ impl<CL: Borrow<Client202>> TreeConnection<'_, '_, CL> {
         if let Err(e) = parse_share_path(path) {
             return Err(TreeConnectError::InvalidPath(e));
         };
+        let mut lock = session.connection.borrow_tcp();
         write_202_message(
-            &mut session.connection.tcp,
+            lock.deref_mut(),
             session_key,
             tc_header,
             &TreeConnectRequest(path),
             false,
         )?;
         let (header, msg) =
-            read_202_message(&mut session.connection.tcp, Validation::from(session_key)).unwrap();
+            read_202_message(lock.deref_mut(), Validation::from(session_key)).unwrap();
+        drop(lock);
         if let Some(code) = NonZero::new(header.status) {
             return Err(ServerError::handle_error_body(code, &msg));
         }
@@ -84,16 +87,9 @@ impl<CL> Drop for TreeConnection<'_, '_, CL> {
         let header = SyncHeader202Outgoing::from_tree_con(self, Command202::TreeDisconnect);
         let session = &mut self.session;
         let key = session.requires_signing().then_some(*session.session_key());
-        let _ = write_202_message(
-            &mut session.connection.tcp,
-            key,
-            header,
-            &TreeDisconnectRequest,
-            false,
-        );
-        let Ok((_header, body)) =
-            read_202_message(&mut session.connection.tcp, Validation::from(key))
-        else {
+        let mut lock = session.connection.borrow_tcp();
+        let _ = write_202_message(lock.deref_mut(), key, header, &TreeDisconnectRequest, false);
+        let Ok((_header, body)) = read_202_message(lock.deref_mut(), Validation::from(key)) else {
             return;
         };
         let _ = TreeDisconnectResponse::read_from(body.as_ref());

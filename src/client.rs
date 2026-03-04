@@ -3,6 +3,10 @@ use std::{
     io::Cursor,
     net::{TcpStream, ToSocketAddrs},
     num::NonZero,
+    sync::{
+        Mutex, MutexGuard,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use kenobi::cred::{Credentials, Outbound};
@@ -87,8 +91,8 @@ impl Client202 {
 
         Ok(Connection {
             client,
-            message_id: 1,
-            tcp,
+            message_id: 1.into(),
+            tcp: Mutex::new(tcp),
             max_transact_size: neg_resp.max_transact_size,
             max_read_size: neg_resp.max_read_size,
             max_write_size: neg_resp.max_write_size,
@@ -100,21 +104,22 @@ impl Client202 {
 #[derive(Debug)]
 pub struct Connection<CL> {
     pub(crate) client: CL,
-    message_id: u64,
-    pub(crate) tcp: TcpStream,
+    message_id: AtomicU64,
+    tcp: Mutex<TcpStream>,
     max_transact_size: u32,
     max_read_size: u32,
     max_write_size: u32,
     server_requires_signing: bool,
 }
 impl<CL> Connection<CL> {
-    pub(crate) fn fetch_increment_message_id(&mut self) -> u64 {
-        let num = self.message_id;
-        self.message_id += 1;
-        num
+    pub(crate) fn fetch_increment_message_id(&self) -> u64 {
+        self.message_id.fetch_add(1, Ordering::Relaxed)
     }
     pub fn server_requires_signing(&self) -> bool {
         self.server_requires_signing
+    }
+    pub fn borrow_tcp(&self) -> MutexGuard<'_, TcpStream> {
+        self.tcp.lock().unwrap()
     }
 }
 impl<CL: Borrow<Client202>> Connection<CL> {

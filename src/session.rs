@@ -3,6 +3,7 @@ use std::{
     fmt::Debug,
     io::{Cursor, ErrorKind, Read, Seek, SeekFrom, Write},
     num::NonZero,
+    ops::DerefMut,
 };
 
 use kenobi::{
@@ -28,7 +29,7 @@ const ERROR_MORE_PROCESSING_REQUIRED: u32 = 0xC0000016;
 pub struct Session202<'con, CL> {
     session_key: [u8; 16],
     pub(crate) id: u64,
-    pub(crate) connection: &'con mut Connection<CL>,
+    pub(crate) connection: &'con Connection<CL>,
     flags: SessionFlags,
     requires_signing: bool,
 }
@@ -55,7 +56,7 @@ impl<CL> Session202<'_, CL> {
 }
 impl<CL: Borrow<Client202>> Session202<'_, CL> {
     pub(crate) fn new<'con>(
-        connection: &'con mut Connection<CL>,
+        connection: &'con Connection<CL>,
         cred: &Credentials<Outbound>,
         target_spn: Option<&str>,
     ) -> Result<Session202<'con, CL>, SessionSetupError> {
@@ -89,8 +90,10 @@ impl<CL: Borrow<Client202>> Session202<'_, CL> {
                 previous_session_id: 0,
                 buffer: auth_context.next_token(),
             };
-            write_202_message(&mut connection.tcp, None, header, &body, false)?;
-            let message_buffer = buffer_for_delayed_validation(&mut connection.tcp)?;
+            let mut connection_lock = connection.borrow_tcp();
+            write_202_message(connection_lock.deref_mut(), None, header, &body, false)?;
+            let message_buffer = buffer_for_delayed_validation(connection_lock.deref_mut())?;
+            drop(connection_lock);
             let (header, body) = read_202_message(&mut message_buffer.as_ref(), Validation::Skip)?;
             // Lookup session ID
             if let Some(code) = NonZero::new(header.status)
@@ -160,14 +163,9 @@ impl<CL> Drop for Session202<'_, CL> {
             session_id: self.id,
         };
         let key = self.requires_signing().then_some(self.session_key);
-        let _ = write_202_message(
-            &mut self.connection.tcp,
-            key,
-            logoff_header,
-            &LogoffRequest,
-            false,
-        );
-        let _ = read_202_message(&mut self.connection.tcp, Validation::Key(self.session_key));
+        let mut lock = self.connection.borrow_tcp();
+        let _ = write_202_message(lock.deref_mut(), key, logoff_header, &LogoffRequest, false);
+        let _ = read_202_message(lock.deref_mut(), Validation::Key(self.session_key));
     }
 }
 
