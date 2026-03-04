@@ -1,5 +1,5 @@
 use std::{
-    io::{Cursor, Read, Write},
+    io::{Cursor, ErrorKind, Read, Seek, SeekFrom, Write},
     num::NonZero,
     ops::BitOr,
 };
@@ -27,6 +27,7 @@ pub struct FileHandle<'client, 'con, 'session, 'tree> {
     tree_connection: &'tree mut TreeConnection<'client, 'con, 'session>,
     id: FileId,
     oplock_level: Option<OplockLevel202>,
+    offset: u64,
     allocation_size: u64,
     end_of_file: u64,
     creation_time: u64,
@@ -83,8 +84,9 @@ impl FileHandle<'_, '_, '_, '_> {
             attributes,
             id,
         } = CreateResponse::read_from(body.as_ref()).unwrap();
-        Ok(dbg!(FileHandle {
+        Ok(FileHandle {
             oplock_level,
+            offset: 0,
             tree_connection,
             id,
             allocation_size,
@@ -93,11 +95,10 @@ impl FileHandle<'_, '_, '_, '_> {
             last_access_time,
             last_write_time,
             change_time,
-        }))
+        })
     }
     pub fn read_raw(
         &mut self,
-        offset: u64,
         length: u32,
         minimum_count: u32,
     ) -> Result<Box<[u8]>, ReadFileError> {
@@ -113,7 +114,7 @@ impl FileHandle<'_, '_, '_, '_> {
             header,
             &ReadRequest {
                 length,
-                offset,
+                offset: self.offset,
                 id: self.id,
                 minimum_count,
             },
@@ -170,6 +171,39 @@ impl FileHandle<'_, '_, '_, '_> {
 impl Drop for FileHandle<'_, '_, '_, '_> {
     fn drop(&mut self) {
         let _ = self.send_close();
+    }
+}
+impl Read for FileHandle<'_, '_, '_, '_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let len = buf.len().try_into().unwrap_or(u32::MAX);
+        match self.read_raw(len, 0) {
+            Ok(outbuf) => {
+                assert!(outbuf.len() <= len as usize);
+                self.offset += outbuf.len() as u64;
+                buf.copy_from_slice(&outbuf);
+                Ok(outbuf.len())
+            }
+            Err(ReadFileError::InvalidMessage) => Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                "server sent an invalid message",
+            )),
+            Err(ReadFileError::Io(io)) => Err(io),
+            Err(ReadFileError::ServerError { code, body }) => {
+                dbg!(code, body);
+                Err(std::io::Error::other("server sent a protocol error"))
+            }
+        }
+    }
+}
+impl Seek for FileHandle<'_, '_, '_, '_> {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        let new = match pos {
+            SeekFrom::Start(s) => s,
+            SeekFrom::Current(c) => self.offset.saturating_add_signed(c),
+            SeekFrom::End(c) => self.end_of_file.saturating_add_signed(c),
+        };
+        self.offset = new;
+        Ok(new)
     }
 }
 

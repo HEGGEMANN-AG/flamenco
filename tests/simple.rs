@@ -1,3 +1,5 @@
+use std::io::Read;
+
 use kenobi::cred::Credentials;
 
 #[test]
@@ -19,6 +21,8 @@ fn main() {
         .unwrap();
     let mut tree = session.tree_connect(&share_path).unwrap();
     let mut file = tree.open_file(&file_path).unwrap();
-    dbg!(String::from_utf8(file.read_raw(0, 13, 0).unwrap().to_vec()).unwrap());
+    let mut buf = vec![0; 13];
+    file.read_exact(&mut buf).unwrap();
+    dbg!(String::from_utf8(buf).unwrap());
     std::thread::sleep(Duration::from_millis(200));
 }
