@@ -103,6 +103,21 @@ pub enum ReadFileError {
         body: ErrorResponse2,
     },
 }
+impl ReadFileError {
+    pub fn collapse_to_io_error(self) -> std::io::Error {
+        match self {
+            ReadFileError::InvalidMessage => std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "server sent an invalid message",
+            ),
+            ReadFileError::Io(io) => io,
+            ReadFileError::ServerError { code, body } => {
+                dbg!(code, body);
+                std::io::Error::other("server sent a protocol error")
+            }
+        }
+    }
+}
 impl From<std::io::Error> for ReadFileError {
     fn from(value: std::io::Error) -> Self {
         Self::Io(value)

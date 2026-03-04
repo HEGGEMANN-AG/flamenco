@@ -1,5 +1,5 @@
 use std::{
-    io::{Cursor, ErrorKind, Read, Seek, SeekFrom, Write},
+    io::{Cursor, Read, Seek, SeekFrom, Write},
     num::NonZero,
     ops::BitOr,
 };
@@ -183,15 +183,7 @@ impl Read for FileHandle<'_, '_, '_, '_> {
                 buf.copy_from_slice(&outbuf);
                 Ok(outbuf.len())
             }
-            Err(ReadFileError::InvalidMessage) => Err(std::io::Error::new(
-                ErrorKind::InvalidData,
-                "server sent an invalid message",
-            )),
-            Err(ReadFileError::Io(io)) => Err(io),
-            Err(ReadFileError::ServerError { code, body }) => {
-                dbg!(code, body);
-                Err(std::io::Error::other("server sent a protocol error"))
-            }
+            Err(rd) => Err(rd.collapse_to_io_error()),
         }
     }
     fn read_exact(&mut self, buf: &mut [u8]) -> std::io::Result<()> {
@@ -203,15 +195,7 @@ impl Read for FileHandle<'_, '_, '_, '_> {
                 buf.copy_from_slice(&outbuf);
                 Ok(())
             }
-            Err(ReadFileError::InvalidMessage) => Err(std::io::Error::new(
-                ErrorKind::InvalidData,
-                "server sent an invalid message",
-            )),
-            Err(ReadFileError::Io(io)) => Err(io),
-            Err(ReadFileError::ServerError { code, body }) => {
-                dbg!(code, body);
-                Err(std::io::Error::other("server sent a protocol error"))
-            }
+            Err(rf) => Err(rf.collapse_to_io_error()),
         }
     }
 }
