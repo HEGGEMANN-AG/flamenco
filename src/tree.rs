@@ -46,7 +46,7 @@ impl<
         session: Session,
         path: &str,
     ) -> Result<TreeConnection<Session, Con, Stream, Client>, TreeConnectError> {
-        let tc_header = SyncHeader202Outgoing::from_session::<Session, _, _, _>(
+        let tc_header = SyncHeader202Outgoing::from_session::<_, _, _>(
             session.borrow(),
             Command202::TreeConnect,
         );
@@ -108,7 +108,7 @@ impl<
 > TreeConnection<Session, Con, Stream, Client>
 {
     pub fn open_file<'tree>(
-        &'tree mut self,
+        &'tree self,
         path: &str,
     ) -> Result<FileHandle<'tree, Session, Con, Stream, Client>, OpenError> {
         FileHandle::new(self, path)

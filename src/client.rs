@@ -4,7 +4,10 @@ use std::{
     io::Cursor,
     net::{TcpStream, ToSocketAddrs},
     num::NonZero,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use kenobi::cred::{Credentials, Outbound};
@@ -45,9 +48,45 @@ impl Client202 {
         &self,
         addr: impl ToSocketAddrs,
     ) -> Result<Connection<&Client202, RefCell<TcpStream>>, ConnectError> {
-        Client202::connect_with(self, addr)
+        Connection::new(self, addr)
     }
-    pub fn connect_with<Client: Borrow<Self>, Stream: Access<TcpStream>>(
+}
+
+pub type SharedConnection<Client> = Connection<Client, Mutex<TcpStream>>;
+
+#[derive(Debug)]
+pub struct Connection<Client, Stream> {
+    pub(crate) client: Client,
+    message_id: AtomicU64,
+    tcp: Stream,
+    max_transact_size: u32,
+    max_read_size: u32,
+    max_write_size: u32,
+    server_requires_signing: bool,
+}
+impl<Stream, Client> Connection<Client, Stream> {
+    pub(crate) fn fetch_increment_message_id(&self) -> u64 {
+        self.message_id.fetch_add(1, Ordering::Relaxed)
+    }
+    pub fn server_requires_signing(&self) -> bool {
+        self.server_requires_signing
+    }
+}
+impl<Client, Stream: Access<TcpStream>> Connection<Client, Stream> {
+    pub fn borrow_tcp(&self) -> Stream::Guard<'_> {
+        self.tcp.lock_mut()
+    }
+}
+impl<Stream: Access<TcpStream>, Client: Borrow<Client202>> Connection<Client, Stream> {
+    pub fn setup_session<'con>(
+        &'con self,
+        credentials: &Credentials<Outbound>,
+        target_spn: Option<&str>,
+    ) -> Result<Session202<&'con Connection<Client, Stream>, Stream, Client>, SessionSetupError>
+    {
+        Session202::new(self, credentials, target_spn)
+    }
+    pub fn new(
         client: Client,
         addr: impl ToSocketAddrs,
     ) -> Result<Connection<Client, Stream>, ConnectError> {
@@ -97,40 +136,6 @@ impl Client202 {
             max_write_size: neg_resp.max_write_size,
             server_requires_signing,
         })
-    }
-}
-
-#[derive(Debug)]
-pub struct Connection<Client, Stream = RefCell<TcpStream>> {
-    pub(crate) client: Client,
-    message_id: AtomicU64,
-    tcp: Stream,
-    max_transact_size: u32,
-    max_read_size: u32,
-    max_write_size: u32,
-    server_requires_signing: bool,
-}
-impl<Stream, Client> Connection<Client, Stream> {
-    pub(crate) fn fetch_increment_message_id(&self) -> u64 {
-        self.message_id.fetch_add(1, Ordering::Relaxed)
-    }
-    pub fn server_requires_signing(&self) -> bool {
-        self.server_requires_signing
-    }
-}
-impl<Client, Stream: Access<TcpStream>> Connection<Client, Stream> {
-    pub fn borrow_tcp(&self) -> Stream::Guard<'_> {
-        self.tcp.lock_mut()
-    }
-}
-impl<Stream: Access<TcpStream>, Client: Borrow<Client202>> Connection<Client, Stream> {
-    pub fn setup_session<'con>(
-        &'con self,
-        credentials: &Credentials<Outbound>,
-        target_spn: Option<&str>,
-    ) -> Result<Session202<&'con Connection<Client, Stream>, Stream, Client>, SessionSetupError>
-    {
-        Session202::new(self, credentials, target_spn)
     }
 }
 

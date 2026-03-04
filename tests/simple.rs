@@ -1,6 +1,10 @@
-use std::{cell::RefCell, io::Read, net::TcpStream, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
-use flamenco::{client::Client202, session::Session202, tree::TreeConnection};
+use flamenco::{
+    client::{Client202, SharedConnection},
+    session::Session202,
+    tree::TreeConnection,
+};
 use kenobi::cred::Credentials;
 
 #[test]
@@ -14,20 +18,23 @@ fn main() {
     let credentials = Credentials::new(own_spn.as_deref()).unwrap();
     let client_ref = client.clone();
     let server_copy = server.clone();
+    let con: Arc<_> = SharedConnection::new(client_ref, server_copy)
+        .unwrap()
+        .into();
+    let con_copy = con.clone();
+    let tspn_clone = target_spn.clone();
+    let share_path_copy = share_path.clone();
+    let file_path_copy = file_path.clone();
     let t = std::thread::spawn(move || {
-        let con =
-            Client202::connect_with::<_, RefCell<TcpStream>>(client_ref, server_copy).unwrap();
         let credentials = Credentials::new(own_spn.as_deref()).unwrap();
-        let mut session = Session202::new(con, &credentials, target_spn.as_deref()).unwrap();
-        let mut tree = session.tree_connect(&share_path).unwrap();
-        let mut file = tree.open_file(&file_path).unwrap();
-        let mut buf = Vec::new();
-        file.read_to_end(&mut buf).unwrap();
-        dbg!(String::from_utf8(buf).unwrap());
-        std::thread::sleep(Duration::from_millis(200));
+        let session = Session202::new(con_copy, &credentials, tspn_clone.as_deref()).unwrap();
+        let tree = TreeConnection::new(session, &share_path_copy).unwrap();
+        let file = tree.open_file(&file_path_copy).unwrap();
+        std::thread::sleep(Duration::from_secs(1));
     });
-    let con = Client202::connect_with::<_, RefCell<TcpStream>>(client, server).unwrap();
-    let other_session = Session202::new(con, &credentials, None).unwrap();
-    let other_tree = TreeConnection::new(&other_session, "hi").unwrap();
+    let other_session = Session202::new(con, &credentials, target_spn.as_deref()).unwrap();
+    let other_tree = TreeConnection::new(&other_session, &share_path).unwrap();
+    let file2 = other_tree.open_file(&file_path).unwrap();
+    std::thread::sleep(Duration::from_secs(1));
     t.join().unwrap();
 }
