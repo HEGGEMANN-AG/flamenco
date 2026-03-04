@@ -1,12 +1,11 @@
 use std::{
     io::{Cursor, Read, Seek, SeekFrom, Write},
     num::NonZero,
-    ops::{BitOr, Deref, DerefMut},
+    ops::{BitOr, DerefMut},
 };
 
 use crate::{
     ReadLe,
-    client::Client202,
     error::{ErrorResponse2, ServerError},
     file::{
         close::{CloseRequest, CloseResponse},
