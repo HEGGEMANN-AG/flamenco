@@ -26,14 +26,14 @@ use crate::{
 
 const ERROR_MORE_PROCESSING_REQUIRED: u32 = 0xC0000016;
 
-pub struct Session202<'con, CL> {
+pub struct Session202<'con, Client> {
     session_key: [u8; 16],
     pub(crate) id: u64,
-    pub(crate) connection: &'con Connection<CL>,
+    pub(crate) connection: &'con Connection<Client>,
     flags: SessionFlags,
     requires_signing: bool,
 }
-impl<CL: Debug> Debug for Session202<'_, CL> {
+impl<Client: Debug> Debug for Session202<'_, Client> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Session202")
             .field("session_key", &"REDACTED")
@@ -43,7 +43,7 @@ impl<CL: Debug> Debug for Session202<'_, CL> {
             .finish()
     }
 }
-impl<CL> Session202<'_, CL> {
+impl<Client> Session202<'_, Client> {
     pub fn requires_signing(&self) -> bool {
         self.requires_signing
     }
@@ -54,12 +54,12 @@ impl<CL> Session202<'_, CL> {
         drop(self);
     }
 }
-impl<CL: Borrow<Client202>> Session202<'_, CL> {
+impl<Client: Borrow<Client202>> Session202<'_, Client> {
     pub(crate) fn new<'con>(
-        connection: &'con Connection<CL>,
+        connection: &'con Connection<Client>,
         cred: &Credentials<Outbound>,
         target_spn: Option<&str>,
-    ) -> Result<Session202<'con, CL>, SessionSetupError> {
+    ) -> Result<Session202<'con, Client>, SessionSetupError> {
         let mut auth_context = match ClientBuilder::new_from_credentials(cred, target_spn)
             .request_delegation()
             .initialize()
@@ -143,15 +143,15 @@ impl<CL: Borrow<Client202>> Session202<'_, CL> {
         }
     }
 }
-impl<'con, CL: Borrow<Client202>> Session202<'con, CL> {
+impl<'con, Client: Borrow<Client202>> Session202<'con, Client> {
     pub fn tree_connect<'session>(
         &'session mut self,
         share_path: &str,
-    ) -> Result<TreeConnection<'con, 'session, CL>, TreeConnectError> {
+    ) -> Result<TreeConnection<'con, 'session, Client>, TreeConnectError> {
         TreeConnection::new(self, share_path)
     }
 }
-impl<CL> Drop for Session202<'_, CL> {
+impl<Client> Drop for Session202<'_, Client> {
     fn drop(&mut self) {
         let logoff_header = SyncHeader202Outgoing {
             command: Command202::Logoff,

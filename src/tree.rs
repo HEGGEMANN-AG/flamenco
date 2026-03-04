@@ -19,18 +19,18 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub struct TreeConnection<'con, 'session, CL> {
-    session: &'session mut Session202<'con, CL>,
+pub struct TreeConnection<'con, 'session, Client> {
+    session: &'session mut Session202<'con, Client>,
     share_type: ShareType,
     /// There are no valid flags in 202 besides the SMB2_SHARE_CAP_DFS
     dfs_capability: bool,
     id: u32,
 }
-impl<CL: Borrow<Client202>> TreeConnection<'_, '_, CL> {
+impl<Client: Borrow<Client202>> TreeConnection<'_, '_, Client> {
     pub fn new<'con, 'session>(
-        session: &'session mut Session202<'con, CL>,
+        session: &'session mut Session202<'con, Client>,
         path: &str,
-    ) -> Result<TreeConnection<'con, 'session, CL>, TreeConnectError> {
+    ) -> Result<TreeConnection<'con, 'session, Client>, TreeConnectError> {
         let tc_header = SyncHeader202Outgoing::from_session(session, Command202::TreeConnect);
         let session_key = session
             .requires_signing()
@@ -66,23 +66,21 @@ impl<CL: Borrow<Client202>> TreeConnection<'_, '_, CL> {
         drop(self)
     }
 }
-impl<'con, 'session, CL> TreeConnection<'con, 'session, CL> {
-    pub(crate) fn session_mut(&mut self) -> &mut Session202<'con, CL> {
+impl<'con, 'session, Client> TreeConnection<'con, 'session, Client> {
+    pub(crate) fn session_mut(&mut self) -> &mut Session202<'con, Client> {
         self.session
     }
     pub fn id(&self) -> u32 {
         self.id
     }
-}
-impl<'con, 'session, CL> TreeConnection<'con, 'session, CL> {
     pub fn open_file<'tree>(
         &'tree mut self,
         path: &str,
-    ) -> Result<FileHandle<'con, 'session, 'tree, CL>, OpenError> {
+    ) -> Result<FileHandle<'con, 'session, 'tree, Client>, OpenError> {
         FileHandle::new(self, path)
     }
 }
-impl<CL> Drop for TreeConnection<'_, '_, CL> {
+impl<Client> Drop for TreeConnection<'_, '_, Client> {
     fn drop(&mut self) {
         let header = SyncHeader202Outgoing::from_tree_con(self, Command202::TreeDisconnect);
         let session = &mut self.session;

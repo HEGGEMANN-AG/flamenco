@@ -24,8 +24,8 @@ mod close;
 mod read;
 
 #[derive(Debug)]
-pub struct FileHandle<'con, 'session, 'tree, CL> {
-    tree_connection: &'tree mut TreeConnection<'con, 'session, CL>,
+pub struct FileHandle<'con, 'session, 'tree, Client> {
+    tree_connection: &'tree mut TreeConnection<'con, 'session, Client>,
     id: FileId,
     oplock_level: Option<OplockLevel202>,
     offset: u64,
@@ -36,11 +36,11 @@ pub struct FileHandle<'con, 'session, 'tree, CL> {
     last_write_time: u64,
     change_time: u64,
 }
-impl<CL> FileHandle<'_, '_, '_, CL> {
+impl<Client> FileHandle<'_, '_, '_, Client> {
     pub(crate) fn new<'tree, 'client, 'con, 'session>(
-        tree_connection: &'tree mut TreeConnection<'con, 'session, CL>,
+        tree_connection: &'tree mut TreeConnection<'con, 'session, Client>,
         path: &str,
-    ) -> Result<FileHandle<'con, 'session, 'tree, CL>, OpenError> {
+    ) -> Result<FileHandle<'con, 'session, 'tree, Client>, OpenError> {
         let header = SyncHeader202Outgoing::from_tree_con(tree_connection, Command202::Create);
         let request_body = FileCreateRequest {
             oplock_level: Some(OplockLevel202::Batch),
@@ -167,12 +167,12 @@ impl<CL> FileHandle<'_, '_, '_, CL> {
         self.send_close()
     }
 }
-impl<CL> Drop for FileHandle<'_, '_, '_, CL> {
+impl<Client> Drop for FileHandle<'_, '_, '_, Client> {
     fn drop(&mut self) {
         let _ = self.send_close();
     }
 }
-impl<CL> Read for FileHandle<'_, '_, '_, CL> {
+impl<Client> Read for FileHandle<'_, '_, '_, Client> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let until_end = (self.end_of_file - self.offset)
             .try_into()
@@ -204,7 +204,7 @@ impl<CL> Read for FileHandle<'_, '_, '_, CL> {
         }
     }
 }
-impl<CL> Seek for FileHandle<'_, '_, '_, CL> {
+impl<Client> Seek for FileHandle<'_, '_, '_, Client> {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
         let new = match pos {
             SeekFrom::Start(s) => s,

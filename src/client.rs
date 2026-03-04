@@ -48,10 +48,10 @@ impl Client202 {
     ) -> Result<Connection<&Client202>, ConnectError> {
         Client202::connect_with(self, addr)
     }
-    pub fn connect_with<CL: Borrow<Self>>(
-        client: CL,
+    pub fn connect_with<Client: Borrow<Self>>(
+        client: Client,
         addr: impl ToSocketAddrs,
-    ) -> Result<Connection<CL>, ConnectError> {
+    ) -> Result<Connection<Client>, ConnectError> {
         let mut tcp = TcpStream::connect(addr)?;
         let neg_header = SyncHeader202Outgoing {
             command: Command202::Negotiate,
@@ -102,8 +102,8 @@ impl Client202 {
 }
 
 #[derive(Debug)]
-pub struct Connection<CL> {
-    pub(crate) client: CL,
+pub struct Connection<Client> {
+    pub(crate) client: Client,
     message_id: AtomicU64,
     tcp: Mutex<TcpStream>,
     max_transact_size: u32,
@@ -111,7 +111,7 @@ pub struct Connection<CL> {
     max_write_size: u32,
     server_requires_signing: bool,
 }
-impl<CL> Connection<CL> {
+impl<Client> Connection<Client> {
     pub(crate) fn fetch_increment_message_id(&self) -> u64 {
         self.message_id.fetch_add(1, Ordering::Relaxed)
     }
@@ -122,12 +122,12 @@ impl<CL> Connection<CL> {
         self.tcp.lock().unwrap()
     }
 }
-impl<CL: Borrow<Client202>> Connection<CL> {
+impl<Client: Borrow<Client202>> Connection<Client> {
     pub fn setup_session<'con>(
         &'con mut self,
         credentials: &Credentials<Outbound>,
         target_spn: Option<&str>,
-    ) -> Result<Session202<'con, CL>, SessionSetupError> {
+    ) -> Result<Session202<'con, Client>, SessionSetupError> {
         Session202::new(self, credentials, target_spn)
     }
 }
