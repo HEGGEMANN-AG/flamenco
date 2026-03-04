@@ -101,7 +101,7 @@ impl Client202 {
 }
 
 #[derive(Debug)]
-pub struct Connection<Client, Stream> {
+pub struct Connection<Client, Stream = RefCell<TcpStream>> {
     pub(crate) client: Client,
     message_id: AtomicU64,
     tcp: Stream,
