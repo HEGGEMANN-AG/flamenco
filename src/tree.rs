@@ -41,6 +41,7 @@ impl TreeConnection<'_, '_, '_> {
             session_key,
             tc_header,
             &TreeConnectRequest(path),
+            false,
         )?;
         let (header, msg) =
             read_202_message(&mut session.connection.tcp, Validation::from(session_key)).unwrap();
@@ -84,6 +85,7 @@ impl Drop for TreeConnection<'_, '_, '_> {
             key,
             header,
             &TreeDisconnectRequest,
+            false,
         );
         let Ok((_header, body)) =
             read_202_message(&mut session.connection.tcp, Validation::from(key))

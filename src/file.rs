@@ -45,7 +45,7 @@ impl FileHandle<'_, '_, '_, '_> {
                 | AccessMask::READ_EA
                 | AccessMask::READ_CONTROL,
             file_attributes: 0x0,
-            create_options: 0x40 | 0x200 | 0x800,
+            create_options: 0x40 | 0x200,
             share_access: ShareAccess::SHARE_READ | ShareAccess::SHARE_WRITE,
             create_disposition: CreateDisposition::Open,
             path,
@@ -55,7 +55,14 @@ impl FileHandle<'_, '_, '_, '_> {
             .requires_signing()
             .then_some(session.session_key())
             .copied();
-        write_202_message(&mut session.connection.tcp, key, header, &request_body).unwrap();
+        write_202_message(
+            &mut session.connection.tcp,
+            key,
+            header,
+            &request_body,
+            false,
+        )
+        .unwrap();
         let (header, body) =
             read_202_message(&mut session.connection.tcp, Validation::from(key)).unwrap();
         if let Some(code) = NonZero::new(header.status) {
@@ -107,6 +114,7 @@ impl FileHandle<'_, '_, '_, '_> {
                 id: self.id,
                 minimum_count,
             },
+            true,
         )
         .unwrap();
         let (header, body) =
@@ -131,6 +139,7 @@ impl FileHandle<'_, '_, '_, '_> {
             session_key,
             header,
             &CloseRequest { id: self.id },
+            false,
         )
         .unwrap();
         let (header, body) =

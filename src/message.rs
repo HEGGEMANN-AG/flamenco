@@ -108,6 +108,7 @@ pub fn write_202_message<W: Write, M: MessageBody>(
     sign_with_key: Option<[u8; 16]>,
     mut header: SyncHeader202Outgoing,
     body: &M,
+    add_null: bool,
 ) -> Result<(), WriteError> {
     let mut buffer = Vec::with_capacity(64 + body.size_hint());
     if sign_with_key.is_some() {
@@ -115,6 +116,9 @@ pub fn write_202_message<W: Write, M: MessageBody>(
     }
     buffer.write_all(&header.to_bytes()).unwrap();
     body.write_to(&mut buffer).unwrap();
+    if add_null {
+        buffer.push(0);
+    }
     match buffer.len() {
         0..=64 => unreachable!(),
         0x0100_0000.. => Err(WriteError::MessageTooLong),

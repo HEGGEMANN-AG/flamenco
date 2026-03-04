@@ -83,7 +83,7 @@ impl Session202<'_, '_> {
                 previous_session_id: 0,
                 buffer: auth_context.next_token(),
             };
-            write_202_message(&mut connection.tcp, None, header, &body)?;
+            write_202_message(&mut connection.tcp, None, header, &body, false)?;
             let message_buffer = buffer_for_delayed_validation(&mut connection.tcp)?;
             let (header, body) = read_202_message(&mut message_buffer.as_ref(), Validation::Skip)?;
             // Lookup session ID
@@ -154,7 +154,13 @@ impl Drop for Session202<'_, '_> {
             session_id: self.id,
         };
         let key = self.requires_signing().then_some(self.session_key);
-        let _ = write_202_message(&mut self.connection.tcp, key, logoff_header, &LogoffRequest);
+        let _ = write_202_message(
+            &mut self.connection.tcp,
+            key,
+            logoff_header,
+            &LogoffRequest,
+            false,
+        );
         let _ = read_202_message(&mut self.connection.tcp, Validation::Key(self.session_key));
     }
 }

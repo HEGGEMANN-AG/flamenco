@@ -52,7 +52,7 @@ impl Client202 {
             capabilities: 0,
             security_mode: SecurityMode::None,
         };
-        write_202_message(&mut tcp, None, neg_header, &neg_req)?;
+        write_202_message(&mut tcp, None, neg_header, &neg_req, false)?;
 
         let (header, body) = read_202_message(&mut tcp, Validation::ExpectNone)?;
         if let Some(code) = NonZero::new(header.status) {
