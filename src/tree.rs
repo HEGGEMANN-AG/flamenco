@@ -1,58 +1,223 @@
-use std::io::{ErrorKind, Read, Write};
+use std::{
+    borrow::Borrow,
+    io::{Cursor, Read, Seek, Write},
+    num::NonZero,
+    sync::Arc,
+};
 
-use crate::{Smb2ClientMessage, access::AccessMask, byteorder::LittleEndian};
+use crate::{
+    ReadLe,
+    error::{ErrorResponse2, ServerError},
+    file::{FileHandle, OpenError},
+    header::{Command202, SyncHeader202Outgoing},
+    message::{
+        MessageBody, Validation, WriteError as MsgWriteError, read_202_message, write_202_message,
+    },
+    session::Session202,
+    share_name::{InvalidShareName, ShareName},
+};
 
-pub struct TreeConnectRequest {
-    share_path: Vec<u8>,
+#[derive(Debug)]
+pub struct TreeConnection {
+    session: Arc<Session202>,
+    share_type: ShareType,
+    /// There are no valid flags in 202 besides the SMB2_SHARE_CAP_DFS
+    dfs_capability: bool,
+    id: u32,
 }
-impl TreeConnectRequest {
-    const SIZE_ON_WIRE: u16 = 9;
-    pub fn new(share_path: &str) -> Self {
-        let share_path = share_path.encode_utf16().flat_map(u16::to_le_bytes).collect();
-        TreeConnectRequest { share_path }
+impl TreeConnection {
+    pub fn new(
+        session: Arc<Session202>,
+        path: &str,
+    ) -> Result<Arc<TreeConnection>, TreeConnectError> {
+        let tc_header = SyncHeader202Outgoing::from_session(&session, Command202::TreeConnect);
+        let session_key = session
+            .requires_signing()
+            .then_some(session.session_key())
+            .copied();
+        if let Err(e) = parse_share_path(path) {
+            return Err(TreeConnectError::InvalidPath(e));
+        };
+        let mut lock = session.connection.inner.lock().unwrap();
+        write_202_message(
+            lock.stream_mut(),
+            session_key,
+            tc_header,
+            &TreeConnectRequest(path),
+            false,
+        )?;
+        let (header, msg) =
+            read_202_message(lock.stream_mut(), Validation::from(session_key)).unwrap();
+        drop(lock);
+        if let Some(code) = NonZero::new(header.status) {
+            return Err(ServerError::handle_error_body(code, &msg));
+        }
+        let response = TreeConnectResponse::read_from(Cursor::new(msg))?;
+        let tree = TreeConnection {
+            session,
+            share_type: response.share_type,
+            // Ignore all other capabilities for now (since it's 202)
+            dfs_capability: response.capabilities & 0x08 != 0,
+            id: header.tree_id,
+        };
+        Ok(Arc::new(tree))
     }
-
-    fn write_to<W: Write>(&self, mut writer: W) -> std::io::Result<()> {
-        Self::SIZE_ON_WIRE.write_le(&mut writer)?;
-        0u16.write_le(&mut writer)?;
-        (64u16 + 8u16).write_le(&mut writer)?;
-        (self.share_path.len() as u16).write_le(&mut writer)?;
-        writer.write_all(self.share_path.as_slice())?;
-        Ok(())
+    pub fn disconnect(self) {
+        drop(self)
+    }
+    pub(crate) fn session(&self) -> &Session202 {
+        self.session.borrow()
+    }
+    pub fn id(&self) -> u32 {
+        self.id
+    }
+    pub fn open_file(self: Arc<Self>, path: &str) -> Result<FileHandle, OpenError> {
+        FileHandle::new(self, path)
     }
 }
-impl Smb2ClientMessage for TreeConnectRequest {
-    fn write_to<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        self.write_to(writer)
-    }
-    fn size_hint(&self) -> usize {
-        17
+impl Drop for TreeConnection {
+    fn drop(&mut self) {
+        let header = SyncHeader202Outgoing::from_tree_con(self, Command202::TreeDisconnect);
+        let session = &self.session;
+        let key = session.requires_signing().then_some(*session.session_key());
+        let mut lock = session.connection.inner.lock().unwrap();
+        let _ = write_202_message(
+            lock.stream_mut(),
+            key,
+            header,
+            &TreeDisconnectRequest,
+            false,
+        );
+        let Ok((_header, body)) = read_202_message(lock.stream_mut(), Validation::from(key)) else {
+            return;
+        };
+        let _ = TreeDisconnectResponse::read_from(body.as_ref());
     }
 }
 
 #[derive(Debug)]
-pub struct TreeConnectResponse {
-    pub share_type: ShareType,
-    pub share_flags: u32,
-    pub capabilities: u32,
-    pub maximal_access: AccessMask,
+pub enum TreeConnectError {
+    Io(std::io::Error),
+    InvalidPath(InvalidSharePath),
+    InvalidMessage,
+    Server {
+        code: NonZero<u32>,
+        body: ErrorResponse2,
+    },
+}
+impl ServerError for TreeConnectError {
+    fn invalid_message() -> Self {
+        Self::InvalidMessage
+    }
+    fn parsed(code: NonZero<u32>, body: ErrorResponse2) -> Self {
+        Self::Server { code, body }
+    }
+}
+impl From<MsgWriteError> for TreeConnectError {
+    fn from(value: MsgWriteError) -> Self {
+        match value {
+            MsgWriteError::Connection(io) => Self::Io(io),
+            MsgWriteError::MessageTooLong => unreachable!("share path limit already enforces this"),
+        }
+    }
+}
+impl From<std::io::Error> for TreeConnectError {
+    fn from(value: std::io::Error) -> Self {
+        Self::Io(value)
+    }
+}
+impl From<ReadError> for TreeConnectError {
+    fn from(value: ReadError) -> Self {
+        match value {
+            ReadError::Io(io) => Self::Io(io),
+            ReadError::InvalidSize | ReadError::InvalidShareType => Self::InvalidMessage,
+        }
+    }
+}
+
+fn parse_share_path(s: &str) -> Result<(&str, ShareName), InvalidSharePath> {
+    let Some(without_double_slashes) = s.strip_prefix(r"\\") else {
+        return Err(InvalidSharePath::NoLeadingSlashes);
+    };
+    let Some((server_name, share_name)) = without_double_slashes.split_once('\\') else {
+        return Err(InvalidSharePath::MissingSeparator);
+    };
+    if server_name.chars().count() > 255 {
+        return Err(InvalidSharePath::ServerNameTooLong);
+    };
+    let share_name = ShareName::new(share_name).map_err(InvalidSharePath::InvalidShareName)?;
+    Ok((server_name, share_name))
+}
+#[derive(Debug)]
+pub enum InvalidSharePath {
+    NoLeadingSlashes,
+    MissingSeparator,
+    ServerNameTooLong,
+    InvalidShareName(InvalidShareName),
+}
+
+#[derive(Debug)]
+struct TreeConnectRequest<'s>(&'s str);
+impl TreeConnectRequest<'_> {
+    const STRUCTURE_SIZE: u16 = 9;
+    fn write_into<W: Write>(&self, mut w: W) -> Result<(), WriteError> {
+        w.write_all(&Self::STRUCTURE_SIZE.to_le_bytes())?;
+        w.write_all(&0u16.to_le_bytes())?;
+        let utf16 = crate::to_wide(self.0);
+        w.write_all(&(64 + 8u16).to_le_bytes())?;
+        w.write_all(&(utf16.len() as u16).to_le_bytes())?;
+        w.write_all(&utf16)?;
+        Ok(())
+    }
+}
+impl MessageBody for TreeConnectRequest<'_> {
+    type Err = WriteError;
+    fn size_hint(&self) -> usize {
+        8 + (self.0.len() * 2)
+    }
+    fn write_to<W: Write>(&self, w: W) -> Result<(), Self::Err> {
+        self.write_into(w)
+    }
+}
+
+#[derive(Debug)]
+pub enum WriteError {
+    Io(std::io::Error),
+}
+impl From<std::io::Error> for WriteError {
+    fn from(value: std::io::Error) -> Self {
+        Self::Io(value)
+    }
+}
+
+#[derive(Debug)]
+struct TreeConnectResponse {
+    share_type: ShareType,
+    flags: u32,
+    capabilities: u32,
+    maximal_access: u32,
 }
 impl TreeConnectResponse {
-    pub fn read_from<R: Read>(mut r: R) -> std::io::Result<Self> {
-        let structure_size = u16::read_le(&mut r)?;
-        assert_eq!(structure_size, 16);
-        let mut share_type = 0u8;
-        r.read_exact(std::slice::from_mut(&mut share_type))?;
-        let share_type = ShareType::from_u8(share_type)
-            .ok_or_else(|| std::io::Error::new(ErrorKind::InvalidData, "invalid share type"))?;
-        let mut _reserved = 0u8;
-        r.read_exact(std::slice::from_mut(&mut _reserved))?;
-        let share_flags = u32::read_le(&mut r)?;
-        let capabilities = u32::read_le(&mut r)?;
-        let maximal_access = AccessMask::new(u32::read_le(&mut r)?);
+    fn read_from<R: Read + Seek>(mut r: R) -> Result<Self, ReadError> {
+        if r.read_u16()? != 16 {
+            return Err(ReadError::InvalidSize);
+        }
+        let mut share = 0;
+        r.read_exact(std::slice::from_mut(&mut share))?;
+        let share_type = match share {
+            0x01 => ShareType::Disk,
+            0x02 => ShareType::Pipe,
+            0x03 => ShareType::Printer,
+            _ => return Err(ReadError::InvalidShareType),
+        };
+        r.seek_relative(1)?;
+        let flags = r.read_u32()?;
+        // Todo cache check
+        let capabilities = r.read_u32()?;
+        let maximal_access = r.read_u32()?;
         Ok(Self {
             share_type,
-            share_flags,
+            flags,
             capabilities,
             maximal_access,
         })
@@ -60,19 +225,61 @@ impl TreeConnectResponse {
 }
 
 #[derive(Debug)]
-#[repr(u8)]
-pub enum ShareType {
-    Disk = 1,
-    Pipe = 2,
-    Printer = 3,
+pub enum ReadError {
+    Io(std::io::Error),
+    InvalidSize,
+    InvalidShareType,
 }
-impl ShareType {
-    pub fn from_u8(u: u8) -> Option<Self> {
-        match u {
-            1 => Some(Self::Disk),
-            2 => Some(Self::Pipe),
-            3 => Some(Self::Printer),
-            _ => None,
-        }
+impl From<std::io::Error> for ReadError {
+    fn from(value: std::io::Error) -> Self {
+        Self::Io(value)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum ShareType {
+    Disk,
+    Pipe,
+    Printer,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TreeDisconnectRequest;
+impl TreeDisconnectRequest {
+    fn write_into<W: Write>(self, mut w: W) -> Result<(), std::io::Error> {
+        w.write_all(&4u16.to_le_bytes())?;
+        w.write_all(&0u16.to_le_bytes())?;
+        Ok(())
+    }
+}
+impl MessageBody for TreeDisconnectRequest {
+    type Err = std::io::Error;
+    fn size_hint(&self) -> usize {
+        8
+    }
+    fn write_to<W: Write>(&self, w: W) -> Result<(), Self::Err> {
+        (*self).write_into(w)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TreeDisconnectResponse;
+impl TreeDisconnectResponse {
+    fn read_from<R: Read>(mut r: R) -> Result<Self, ReadDisconnectError> {
+        if r.read_u16()? != 4 {
+            return Err(ReadDisconnectError::InvalidSize);
+        };
+        let _ignored = r.read_u16()?;
+        Ok(Self)
+    }
+}
+#[derive(Debug)]
+enum ReadDisconnectError {
+    Io(std::io::Error),
+    InvalidSize,
+}
+impl From<std::io::Error> for ReadDisconnectError {
+    fn from(value: std::io::Error) -> Self {
+        Self::Io(value)
     }
 }

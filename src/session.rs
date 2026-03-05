@@ -1,83 +1,354 @@
-use std::io::{ErrorKind, Read, Write};
+use std::{
+    fmt::Debug,
+    io::{Cursor, ErrorKind, Read, Seek, SeekFrom, Write},
+    num::NonZero,
+    sync::Arc,
+};
 
-use crate::{Smb2ClientMessage, byteorder::LittleEndian, security::SecurityMode8};
+use kenobi::{
+    client::{ClientBuilder, StepOut},
+    cred::{Credentials, Outbound},
+};
+
+use crate::{
+    ReadLe,
+    client::{Connection, GuestPolicy},
+    error::{ErrorResponse2, ServerError},
+    header::{Command202, SyncHeader202Outgoing},
+    message::{
+        MessageBody, ReadError as MsgReadError, Validation, WriteError as MsgWriteError,
+        read_202_message, write_202_message,
+    },
+    sign::SecurityMode,
+    tree::{TreeConnectError, TreeConnection},
+};
+
+const ERROR_MORE_PROCESSING_REQUIRED: u32 = 0xC0000016;
+
+pub struct Session202 {
+    session_key: [u8; 16],
+    pub(crate) id: u64,
+    pub(crate) connection: Arc<Connection>,
+    flags: SessionFlags,
+    requires_signing: bool,
+}
+impl Debug for Session202 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Session202")
+            .field("session_key", &"REDACTED")
+            .field("id", &self.id)
+            .field("connection", &self.connection)
+            .field("flags", &self.flags)
+            .finish()
+    }
+}
+impl Session202 {
+    pub fn requires_signing(&self) -> bool {
+        self.requires_signing
+    }
+    pub(crate) fn session_key(&self) -> &[u8; 16] {
+        &self.session_key
+    }
+    pub fn close(self) {
+        drop(self);
+    }
+    pub fn new(
+        connection: Arc<Connection>,
+        cred: &Credentials<Outbound>,
+        target_spn: Option<&str>,
+    ) -> Result<Arc<Session202>, SessionSetupError> {
+        let mut auth_context = match ClientBuilder::new_from_credentials(cred, target_spn)
+            .request_delegation()
+            .initialize()
+        {
+            StepOut::Pending(pending) => pending,
+            StepOut::Finished(_c) => unreachable!(),
+        };
+        let mut session_id = 0;
+        loop {
+            let client = &connection.client;
+            let mut connection_lock = connection.inner.lock().unwrap();
+            let message_id = connection_lock.fetch_increment_message_id();
+            let header = SyncHeader202Outgoing {
+                command: Command202::SessionSetup,
+                credits: 256,
+                flags: 0,
+                next_command: None,
+                message_id,
+                tree_id: 0,
+                session_id,
+            };
+            let body = SessionSetupRequest {
+                security_mode: if client.requires_signing {
+                    SecurityMode::SigningRequired
+                } else {
+                    SecurityMode::SigningEnabled
+                },
+                capabilities: 0,
+                previous_session_id: 0,
+                buffer: auth_context.next_token(),
+            };
+            write_202_message(connection_lock.stream_mut(), None, header, &body, false)?;
+            let message_buffer = buffer_for_delayed_validation(connection_lock.stream_mut())?;
+            drop(connection_lock);
+            let (header, body) = read_202_message(&mut message_buffer.as_ref(), Validation::Skip)?;
+            // Lookup session ID
+            if let Some(code) = NonZero::new(header.status)
+                && code.get() != ERROR_MORE_PROCESSING_REQUIRED
+            {
+                return Err(SessionSetupError::handle_error_body(code, &body));
+            }
+            let SessionSetupResponse { flags, sec_buffer } =
+                SessionSetupResponse::read_from(Cursor::new(body))?;
+
+            auth_context = match auth_context.step(&sec_buffer) {
+                StepOut::Pending(p) => p,
+                StepOut::Finished(context) => {
+                    let session_key = *context
+                        .session_key()
+                        .first_chunk::<16>()
+                        .ok_or(SessionSetupError::SessionKeyTooShort)?;
+                    let (_, _) = read_202_message(&*message_buffer, Validation::Key(session_key))?;
+                    if flags == SessionFlags::Guest {
+                        match client.guest_policy {
+                            GuestPolicy::Disallowed => {
+                                return Err(SessionSetupError::DisallowedGuestAccess);
+                            }
+                            GuestPolicy::AllowedInsecurely if client.requires_signing => {
+                                return Err(SessionSetupError::DisallowedGuestAccess);
+                            }
+                            _ => {}
+                        }
+                    }
+                    let requires_signing = match flags {
+                        SessionFlags::None => {
+                            connection.server_requires_signing() || client.requires_signing
+                        }
+                        SessionFlags::Guest => client.requires_signing,
+                        SessionFlags::Anonymous => false,
+                    };
+                    let session = Session202 {
+                        flags,
+                        requires_signing,
+                        id: header.session_id,
+                        session_key,
+                        connection,
+                    };
+                    return Ok(Arc::new(session));
+                }
+            };
+            session_id = header.session_id;
+        }
+    }
+    pub fn tree_connect(
+        self: Arc<Self>,
+        share_path: &str,
+    ) -> Result<Arc<TreeConnection>, TreeConnectError> {
+        TreeConnection::new(self, share_path)
+    }
+}
+impl Drop for Session202 {
+    fn drop(&mut self) {
+        let mut lock = self.connection.inner.lock().unwrap();
+        let logoff_header = SyncHeader202Outgoing {
+            command: Command202::Logoff,
+            credits: 0,
+            flags: 0,
+            next_command: None,
+            message_id: lock.fetch_increment_message_id(),
+            tree_id: 0,
+            session_id: self.id,
+        };
+        let key = self.requires_signing().then_some(self.session_key);
+        let _ = write_202_message(lock.stream_mut(), key, logoff_header, &LogoffRequest, false);
+        let _ = read_202_message(lock.stream_mut(), Validation::Key(self.session_key));
+    }
+}
+
+fn buffer_for_delayed_validation<R: Read>(mut r: R) -> Result<Box<[u8]>, MsgReadError> {
+    let mut bios_size = [0u8; 4];
+    r.read_exact(&mut bios_size)
+        .map_err(MsgReadError::Connection)?;
+    let message_size = match u32::from_be_bytes(bios_size) {
+        0..64 => {
+            return Err(MsgReadError::Connection(std::io::Error::new(
+                ErrorKind::UnexpectedEof,
+                "Not enough data for header",
+            )));
+        }
+        0x0100_0000.. => return Err(MsgReadError::NetBIOS),
+        size => size,
+    };
+    let message_body_size = message_size as usize;
+    let mut message_body_with_netbios = vec![0u8; message_body_size + 4].into_boxed_slice();
+    let (bios, body) = message_body_with_netbios
+        .split_first_chunk_mut::<4>()
+        .unwrap();
+    bios.copy_from_slice(&bios_size);
+    r.read_exact(body).map_err(MsgReadError::Connection)?;
+    Ok(message_body_with_netbios)
+}
 
 #[derive(Debug)]
-pub struct SessionSetupRequest {
-    pub flags: u8,
-    pub security_mode: SecurityMode8,
+pub enum SessionSetupError {
+    Io(std::io::Error),
+    DisallowedGuestAccess,
+    AuthContextTokenTooLong,
+    SessionKeyTooShort,
+    InvalidMessage,
+    ServerError {
+        code: NonZero<u32>,
+        body: ErrorResponse2,
+    },
+}
+impl From<MsgWriteError> for SessionSetupError {
+    fn from(value: MsgWriteError) -> Self {
+        match value {
+            MsgWriteError::Connection(error) => Self::Io(error),
+            MsgWriteError::MessageTooLong => Self::AuthContextTokenTooLong,
+        }
+    }
+}
+impl From<MsgReadError> for SessionSetupError {
+    fn from(value: MsgReadError) -> Self {
+        match value {
+            MsgReadError::InvalidSignature
+            | MsgReadError::InvalidlySignedMessage
+            | MsgReadError::NotSigned
+            | MsgReadError::NetBIOS => Self::InvalidMessage,
+            MsgReadError::Connection(io) => Self::Io(io),
+        }
+    }
+}
+impl From<ReadError> for SessionSetupError {
+    fn from(value: ReadError) -> Self {
+        match value {
+            ReadError::InvalidFlags | ReadError::InvalidSize => Self::InvalidMessage,
+            ReadError::Io(io) => Self::Io(io),
+        }
+    }
+}
+impl ServerError for SessionSetupError {
+    fn invalid_message() -> Self {
+        Self::InvalidMessage
+    }
+    fn parsed(code: NonZero<u32>, body: ErrorResponse2) -> Self {
+        Self::ServerError { code, body }
+    }
+}
+impl From<std::io::Error> for SessionSetupError {
+    fn from(value: std::io::Error) -> Self {
+        Self::Io(value)
+    }
+}
+
+#[derive(Debug)]
+struct SessionSetupRequest<'buf> {
+    pub security_mode: SecurityMode,
     pub capabilities: u32,
     pub previous_session_id: u64,
-    pub security_buffer: Box<[u8]>,
+    pub buffer: &'buf [u8],
 }
-impl SessionSetupRequest {
-    fn write_to<W: Write>(&self, mut writer: W) -> std::io::Result<()> {
-        25u16.write_le(&mut writer)?;
-        writer.write_all(&[self.flags, self.security_mode.as_u8()])?;
-        self.capabilities.write_le(&mut writer)?;
-        // Channel, must be reserved
-        0u32.write_le(&mut writer)?;
-        // Security buffer offset
-        (64u16 + 24).write_le(&mut writer)?;
-        (self.security_buffer.len() as u16).write_le(&mut writer)?;
-        self.previous_session_id.write_le(&mut writer)?;
-        writer.write_all(&self.security_buffer)?;
+impl SessionSetupRequest<'_> {
+    fn write_into<W: Write>(&self, mut w: W) -> Result<(), WriteError> {
+        w.write_all(&25u16.to_le_bytes())?;
+        // flags
+        w.write_all(&[0])?;
+        // security mode
+        w.write_all(&[self.security_mode.to_value()])?;
+        w.write_all(&self.capabilities.to_le_bytes())?;
+        // channel
+        w.write_all(&0u32.to_le_bytes())?;
+
+        let secbuf_offset: u16 = 64 + 24;
+        w.write_all(&secbuf_offset.to_le_bytes())?;
+        let Ok(secbuf_len): Result<u16, _> = self.buffer.len().try_into() else {
+            return Err(WriteError::BufferTooLong);
+        };
+        w.write_all(&secbuf_len.to_le_bytes())?;
+
+        w.write_all(&self.previous_session_id.to_le_bytes())?;
+        w.write_all(self.buffer)?;
         Ok(())
     }
 }
-
-impl Smb2ClientMessage for SessionSetupRequest {
-    fn write_to<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        self.write_to(writer)
+impl MessageBody for SessionSetupRequest<'_> {
+    type Err = WriteError;
+    fn write_to<W: Write>(&self, w: W) -> Result<(), Self::Err> {
+        SessionSetupRequest::write_into(self, w)
     }
     fn size_hint(&self) -> usize {
-        25
+        24 + self.buffer.len()
     }
 }
 
 #[derive(Debug)]
-pub struct SessionSetupResponse {
-    pub session_flags: SessionFlags,
-    security_buffer: Box<[u8]>,
+enum WriteError {
+    Io(std::io::Error),
+    BufferTooLong,
+}
+
+impl From<std::io::Error> for WriteError {
+    fn from(value: std::io::Error) -> Self {
+        Self::Io(value)
+    }
+}
+
+#[derive(Debug)]
+struct SessionSetupResponse {
+    flags: SessionFlags,
+    sec_buffer: Box<[u8]>,
 }
 impl SessionSetupResponse {
-    pub fn read_from<R: Read>(mut r: R) -> std::io::Result<Self> {
-        let size = u16::read_le(&mut r)?;
-        assert_eq!(size, 9);
-        let session_flags = SessionFlags::from_u16(u16::read_le(&mut r)?)
-            .ok_or_else(|| std::io::Error::new(ErrorKind::InvalidData, "invalid session flags"))?;
-        let offset = u16::read_le(&mut r)?;
-        let length = u16::read_le(&mut r)?;
-        let mut security_buffer = vec![0; length as usize].into_boxed_slice();
-        let mut _ignore = vec![0; offset as usize - 64 - 8];
-        r.read_exact(&mut _ignore)?;
-        r.read_exact(&mut security_buffer)?;
-        Ok(Self {
-            session_flags,
-            security_buffer,
-        })
-    }
-    pub fn security_token(&self) -> &[u8] {
-        &self.security_buffer
+    const STRUCTURE_SIZE: u16 = 9;
+    fn read_from<R: Read + Seek>(mut r: R) -> Result<Self, ReadError> {
+        if r.read_u16()? != Self::STRUCTURE_SIZE {
+            return Err(ReadError::InvalidSize);
+        }
+        let flags = match r.read_u16()? {
+            0x00 => SessionFlags::None,
+            0x01 => SessionFlags::Guest,
+            0x02 => SessionFlags::Anonymous,
+            _ => return Err(ReadError::InvalidFlags),
+        };
+        let secbuf_offset = r.read_u16()?;
+        let secbuf_length = r.read_u16()?;
+        r.seek(SeekFrom::Start((secbuf_offset - 64) as u64))?;
+        let mut sec_buffer = vec![0; secbuf_length as usize].into_boxed_slice();
+        r.read_exact(&mut sec_buffer)?;
+        Ok(Self { flags, sec_buffer })
     }
 }
 
 #[derive(Debug)]
-#[repr(u16)]
-pub enum SessionFlags {
-    Empty = 0,
-    Guest = 1,
-    Anonymous = 2,
-    Encrypt = 4,
+enum ReadError {
+    InvalidSize,
+    InvalidFlags,
+    Io(std::io::Error),
 }
-impl SessionFlags {
-    fn from_u16(u: u16) -> Option<Self> {
-        match u {
-            0 => Some(Self::Empty),
-            1 => Some(Self::Guest),
-            2 => Some(Self::Anonymous),
-            4 => Some(Self::Encrypt),
-            _ => None,
-        }
+impl From<std::io::Error> for ReadError {
+    fn from(value: std::io::Error) -> Self {
+        Self::Io(value)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum SessionFlags {
+    None,
+    Guest,
+    Anonymous,
+}
+
+#[derive(Debug)]
+struct LogoffRequest;
+impl MessageBody for LogoffRequest {
+    type Err = std::io::Error;
+    fn write_to<W: Write>(&self, mut w: W) -> Result<(), Self::Err> {
+        w.write_all(&4u32.to_le_bytes())?;
+        w.write_all(&0u32.to_le_bytes())?;
+        Ok(())
+    }
+    fn size_hint(&self) -> usize {
+        4
     }
 }

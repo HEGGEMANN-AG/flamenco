@@ -1,72 +1,105 @@
-use std::{
-    io::{ErrorKind, Read, Write},
-    num::NonZero,
-};
+use std::num::NonZero;
 
-use crate::{byteorder::LittleEndian, command::Command};
+use crate::{session::Session202, tree::TreeConnection};
+
+const PROTOCOL_ID: [u8; 4] = [0xFE, b'S', b'M', b'B'];
+
+pub(crate) const FLAG_SIGNED: u32 = 0x08;
+
+/// No status and signature, since they're not supported on the sender anyway
+pub struct SyncHeader202Outgoing {
+    pub command: Command202,
+    pub credits: u16,
+    pub flags: u32,
+    pub next_command: Option<NonZero<u32>>,
+    pub message_id: u64,
+    pub tree_id: u32,
+    pub session_id: u64,
+}
+impl SyncHeader202Outgoing {
+    pub fn from_session(session: &Session202, command: Command202) -> Self {
+        let message_id = session
+            .connection
+            .inner
+            .lock()
+            .unwrap()
+            .fetch_increment_message_id();
+        Self {
+            command,
+            credits: 0,
+            flags: if session.requires_signing() {
+                FLAG_SIGNED
+            } else {
+                0
+            },
+            next_command: None,
+            message_id,
+            tree_id: 0,
+            session_id: session.id,
+        }
+    }
+    pub fn from_tree_con(tree_con: &TreeConnection, command: Command202) -> Self {
+        let header = Self::from_session(tree_con.session(), command);
+        Self {
+            tree_id: tree_con.id(),
+            ..header
+        }
+    }
+    pub fn to_bytes(&self) -> [u8; 64] {
+        let mut bytes = [0u8; 64];
+        bytes[0..4].copy_from_slice(&PROTOCOL_ID);
+        bytes[4..6].copy_from_slice(&64u16.to_le_bytes());
+        // credit charge and status is already 0
+        bytes[6..8].copy_from_slice(&1u16.to_le_bytes());
+        bytes[12..14].copy_from_slice(&self.command.as_u16().to_le_bytes());
+        bytes[14..16].copy_from_slice(&1u16.to_le_bytes());
+        bytes[16..20].copy_from_slice(&self.flags.to_le_bytes());
+        bytes[20..24].copy_from_slice(&self.next_command.map_or(0, |n| n.get()).to_le_bytes());
+        bytes[24..32].copy_from_slice(&self.message_id.to_le_bytes());
+        bytes[36..40].copy_from_slice(&self.tree_id.to_le_bytes());
+        bytes[40..48].copy_from_slice(&self.session_id.to_le_bytes());
+        bytes
+    }
+}
 
 #[derive(Debug)]
-pub struct Smb2SyncHeader {
-    pub credit_charge: u16,
+pub struct SyncHeader202Incoming {
+    /// ignored when sending
     pub status: u32,
-    pub command: Command,
-    pub credit_request_or_response: u16,
-    pub flags: Flags,
+    pub command: Command202,
+    pub credits: u16,
+    pub flags: u32,
     pub next_command: Option<NonZero<u32>>,
     pub message_id: u64,
     pub tree_id: u32,
     pub session_id: u64,
     pub signature: [u8; 16],
 }
-impl Smb2SyncHeader {
-    const PROTOCOL_ID: [u8; 4] = [0xFE, b'S', b'M', b'B'];
-
-    pub(crate) const SIZE_ON_WIRE: u16 = 64;
-    pub fn write_to<W: Write>(&self, mut writer: W) -> std::io::Result<()> {
-        writer.write_all(&Self::PROTOCOL_ID)?;
-        Self::SIZE_ON_WIRE.write_le(&mut writer)?;
-        self.credit_charge.write_le(&mut writer)?;
-        self.status.write_le(&mut writer)?;
-        (self.command as u16).write_le(&mut writer)?;
-        self.credit_request_or_response.write_le(&mut writer)?;
-        self.flags.0.write_le(&mut writer)?;
-        self.next_command.map_or(0, NonZero::get).write_le(&mut writer)?;
-        self.message_id.write_le(&mut writer)?;
-        0u32.write_le(&mut writer)?;
-        self.tree_id.write_le(&mut writer)?;
-        self.session_id.write_le(&mut writer)?;
-        writer.write_all(&self.signature)?;
-        Ok(())
-    }
-    pub fn read_from<R: Read>(mut read: &mut R) -> std::io::Result<Self> {
-        let mut protocol_id = [0u8; 4];
-        read.read_exact(&mut protocol_id)?;
-        assert_eq!(protocol_id, Self::PROTOCOL_ID);
-
-        let structure_size = u16::read_le(&mut read)?;
-        assert_eq!(64, structure_size);
-
-        let credit_charge = u16::read_le(&mut read)?;
-        let status = u32::read_le(&mut read)?;
-        let command = Command::from_u16(u16::read_le(&mut read)?)
-            .ok_or_else(|| std::io::Error::new(ErrorKind::InvalidData, "invalid command"))?;
-        let credit_request_or_response = u16::read_le(&mut read)?;
-        let flags = u32::read_le(&mut read)?;
-        let next_command = NonZero::new(u32::read_le(&mut read)?);
-
-        let message_id = u64::read_le(&mut read)?;
-        let _reserved = u32::read_le(&mut read)?;
-        let tree_id = u32::read_le(&mut read)?;
-        let session_id = u64::read_le(&mut read)?;
-        let mut signature = [0u8; 16];
-        read.read_exact(&mut signature)?;
-
+impl SyncHeader202Incoming {
+    pub fn from_bytes(b: &[u8; 64]) -> Result<Self, Error> {
+        if b[0..4] != PROTOCOL_ID {
+            return Err(Error::InvalidProtocolID);
+        };
+        if u16::from_le_bytes(*b[4..6].as_array().unwrap()) != 64 {
+            return Err(Error::InvalidSize);
+        }
+        // Ignore credit charge
+        let status = u32::from_le_bytes(*b[8..12].as_array().unwrap());
+        let command = u16::from_le_bytes(*b[12..14].as_array().unwrap());
+        let command = Command202::from_code(command).ok_or(Error::InvalidCommand)?;
+        let credits = u16::from_le_bytes(*b[14..16].as_array().unwrap());
+        let flags = u32::from_le_bytes(*b[16..20].as_array().unwrap());
+        let next_command = u32::from_le_bytes(*b[20..24].as_array().unwrap());
+        let next_command = NonZero::new(next_command);
+        let message_id = u64::from_le_bytes(*b[24..32].as_array().unwrap());
+        let tree_id = u32::from_le_bytes(*b[36..40].as_array().unwrap());
+        let session_id = u64::from_le_bytes(*b[40..48].as_array().unwrap());
+        let signature: [u8; 16] = *b.last_chunk().unwrap();
         Ok(Self {
-            credit_charge,
             status,
             command,
-            credit_request_or_response,
-            flags: Flags(flags),
+            credits,
+            flags,
             next_command,
             message_id,
             tree_id,
@@ -76,14 +109,81 @@ impl Smb2SyncHeader {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Flags(u32);
-impl Flags {
-    pub fn empty() -> Self {
-        Self::default()
+#[derive(Debug)]
+pub enum Error {
+    InvalidProtocolID,
+    InvalidSize,
+    InvalidCommand,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Command202 {
+    Negotiate = 0x00,
+    SessionSetup = 0x01,
+    Logoff = 0x02,
+    TreeConnect = 0x03,
+    TreeDisconnect = 0x04,
+    Create = 0x05,
+    Close = 0x06,
+    Flush = 0x07,
+    Read = 0x08,
+    Write = 0x09,
+    Lock = 0x0A,
+    IoCtl = 0x0B,
+    Cancel = 0x0C,
+    Echo = 0x0D,
+    QueryDirectory = 0x0E,
+    ChangeNotify = 0x0F,
+    QueryInfo = 0x10,
+    SetInfo = 0x11,
+    OplockBreak = 0x12,
+}
+impl Command202 {
+    pub fn from_code(u: u16) -> Option<Self> {
+        match u {
+            0x00 => Some(Self::Negotiate),
+            0x01 => Some(Self::SessionSetup),
+            0x02 => Some(Self::Logoff),
+            0x03 => Some(Self::TreeConnect),
+            0x04 => Some(Self::TreeDisconnect),
+            0x05 => Some(Self::Create),
+            0x06 => Some(Self::Close),
+            0x07 => Some(Self::Flush),
+            0x08 => Some(Self::Read),
+            0x09 => Some(Self::Write),
+            0x0A => Some(Self::Lock),
+            0x0B => Some(Self::IoCtl),
+            0x0C => Some(Self::Cancel),
+            0x0D => Some(Self::Echo),
+            0x0E => Some(Self::QueryDirectory),
+            0x0F => Some(Self::ChangeNotify),
+            0x10 => Some(Self::QueryInfo),
+            0x11 => Some(Self::SetInfo),
+            0x12 => Some(Self::OplockBreak),
+            _ => None,
+        }
     }
-    pub fn contains(self, flag: Flags) -> bool {
-        self.0 & flag.0 != 0
+    pub fn as_u16(self) -> u16 {
+        match self {
+            Self::Negotiate => 0x00,
+            Self::SessionSetup => 0x01,
+            Self::Logoff => 0x02,
+            Self::TreeConnect => 0x03,
+            Self::TreeDisconnect => 0x04,
+            Self::Create => 0x05,
+            Self::Close => 0x06,
+            Self::Flush => 0x07,
+            Self::Read => 0x08,
+            Self::Write => 0x09,
+            Self::Lock => 0x0A,
+            Self::IoCtl => 0x0B,
+            Self::Cancel => 0x0C,
+            Self::Echo => 0x0D,
+            Self::QueryDirectory => 0x0E,
+            Self::ChangeNotify => 0x0F,
+            Self::QueryInfo => 0x10,
+            Self::SetInfo => 0x11,
+            Self::OplockBreak => 0x12,
+        }
     }
 }
-pub const FLAG_SIGNED: Flags = Flags(0x8);
