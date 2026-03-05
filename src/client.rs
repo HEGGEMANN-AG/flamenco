@@ -48,7 +48,7 @@ impl Client202 {
 }
 
 #[derive(Debug)]
-pub struct ConnectionInner {
+pub(crate) struct ConnectionInner {
     message_id: u64,
     tcp: TcpStream,
 }
