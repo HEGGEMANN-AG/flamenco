@@ -1,6 +1,6 @@
-use std::{borrow::Borrow, num::NonZero};
+use std::num::NonZero;
 
-use crate::{client::Connection, session::Session202, sync::Access, tree::TreeConnection};
+use crate::{session::Session202, tree::TreeConnection};
 
 const PROTOCOL_ID: [u8; 4] = [0xFE, b'S', b'M', b'B'];
 
@@ -17,15 +17,12 @@ pub struct SyncHeader202Outgoing {
     pub session_id: u64,
 }
 impl SyncHeader202Outgoing {
-    pub fn from_session<Con: Borrow<Connection<Client, Stream>>, Stream: Access, Client>(
-        session: &Session202<Con, Stream, Client>,
-        command: Command202,
-    ) -> Self {
+    pub fn from_session(session: &Session202, command: Command202) -> Self {
         let message_id = session
             .connection
-            .borrow()
             .inner
-            .lock_mut()
+            .lock()
+            .unwrap()
             .fetch_increment_message_id();
         Self {
             command,
@@ -41,15 +38,7 @@ impl SyncHeader202Outgoing {
             session_id: session.id,
         }
     }
-    pub fn from_tree_con<
-        Session: Borrow<Session202<Con, Stream, Client>>,
-        Con: Borrow<Connection<Client, Stream>>,
-        Stream: Access,
-        Client,
-    >(
-        tree_con: &TreeConnection<Session, Con, Stream, Client>,
-        command: Command202,
-    ) -> Self {
+    pub fn from_tree_con(tree_con: &TreeConnection, command: Command202) -> Self {
         let header = Self::from_session(tree_con.session(), command);
         Self {
             tree_id: tree_con.id(),

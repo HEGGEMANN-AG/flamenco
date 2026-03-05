@@ -1,9 +1,8 @@
 use std::{
-    borrow::Borrow,
     fmt::Debug,
     io::{Cursor, ErrorKind, Read, Seek, SeekFrom, Write},
-    marker::PhantomData,
     num::NonZero,
+    sync::Arc,
 };
 
 use kenobi::{
@@ -13,7 +12,7 @@ use kenobi::{
 
 use crate::{
     ReadLe,
-    client::{Client202, Connection, GuestPolicy},
+    client::{Connection, GuestPolicy},
     error::{ErrorResponse2, ServerError},
     header::{Command202, SyncHeader202Outgoing},
     message::{
@@ -21,23 +20,19 @@ use crate::{
         read_202_message, write_202_message,
     },
     sign::SecurityMode,
-    sync::Access,
     tree::{TreeConnectError, TreeConnection},
 };
 
 const ERROR_MORE_PROCESSING_REQUIRED: u32 = 0xC0000016;
 
-pub struct Session202<ConAccess: Borrow<Connection<Client, Stream>>, Stream: Access, Client> {
+pub struct Session202 {
     session_key: [u8; 16],
     pub(crate) id: u64,
-    pub(crate) connection: ConAccess,
+    pub(crate) connection: Arc<Connection>,
     flags: SessionFlags,
     requires_signing: bool,
-    _marker: PhantomData<(Stream, Client)>,
 }
-impl<Con: Borrow<Connection<Client, Stream>> + Debug, Stream: Access, Client> Debug
-    for Session202<Con, Stream, Client>
-{
+impl Debug for Session202 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Session202")
             .field("session_key", &"REDACTED")
@@ -47,9 +42,7 @@ impl<Con: Borrow<Connection<Client, Stream>> + Debug, Stream: Access, Client> De
             .finish()
     }
 }
-impl<Con: Borrow<Connection<Client, Stream>>, Stream: Access, Client>
-    Session202<Con, Stream, Client>
-{
+impl Session202 {
     pub fn requires_signing(&self) -> bool {
         self.requires_signing
     }
@@ -59,15 +52,11 @@ impl<Con: Borrow<Connection<Client, Stream>>, Stream: Access, Client>
     pub fn close(self) {
         drop(self);
     }
-}
-impl<Con: Borrow<Connection<Client, Stream>>, Stream: Access, Client: Borrow<Client202>>
-    Session202<Con, Stream, Client>
-{
     pub fn new(
-        connection: Con,
+        connection: Arc<Connection>,
         cred: &Credentials<Outbound>,
         target_spn: Option<&str>,
-    ) -> Result<Session202<Con, Stream, Client>, SessionSetupError> {
+    ) -> Result<Arc<Session202>, SessionSetupError> {
         let mut auth_context = match ClientBuilder::new_from_credentials(cred, target_spn)
             .request_delegation()
             .initialize()
@@ -77,8 +66,8 @@ impl<Con: Borrow<Connection<Client, Stream>>, Stream: Access, Client: Borrow<Cli
         };
         let mut session_id = 0;
         loop {
-            let client = connection.borrow().client.borrow();
-            let mut connection_lock = connection.borrow().inner.lock_mut();
+            let client = &connection.client;
+            let mut connection_lock = connection.inner.lock().unwrap();
             let message_id = connection_lock.fetch_increment_message_id();
             let header = SyncHeader202Outgoing {
                 command: Command202::SessionSetup,
@@ -133,44 +122,34 @@ impl<Con: Borrow<Connection<Client, Stream>>, Stream: Access, Client: Borrow<Cli
                     }
                     let requires_signing = match flags {
                         SessionFlags::None => {
-                            connection.borrow().server_requires_signing()
-                                || client.borrow().requires_signing
+                            connection.server_requires_signing() || client.requires_signing
                         }
                         SessionFlags::Guest => client.requires_signing,
                         SessionFlags::Anonymous => false,
                     };
-                    return Ok(Session202 {
+                    let session = Session202 {
                         flags,
                         requires_signing,
                         id: header.session_id,
                         session_key,
                         connection,
-                        _marker: PhantomData,
-                    });
+                    };
+                    return Ok(Arc::new(session));
                 }
             };
             session_id = header.session_id;
         }
     }
-}
-impl<Con: Borrow<Connection<Client, Stream>>, Stream: Access, Client: Borrow<Client202>>
-    Session202<Con, Stream, Client>
-{
-    pub fn tree_connect<'session>(
-        &'session mut self,
+    pub fn tree_connect(
+        self: Arc<Self>,
         share_path: &str,
-    ) -> Result<
-        TreeConnection<&'session Session202<Con, Stream, Client>, Con, Stream, Client>,
-        TreeConnectError,
-    > {
+    ) -> Result<Arc<TreeConnection>, TreeConnectError> {
         TreeConnection::new(self, share_path)
     }
 }
-impl<Con: Borrow<Connection<Client, Stream>>, Stream: Access, Client> Drop
-    for Session202<Con, Stream, Client>
-{
+impl Drop for Session202 {
     fn drop(&mut self) {
-        let mut lock = self.connection.borrow().inner.lock_mut();
+        let mut lock = self.connection.inner.lock().unwrap();
         let logoff_header = SyncHeader202Outgoing {
             command: Command202::Logoff,
             credits: 0,

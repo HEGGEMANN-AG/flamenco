@@ -1,13 +1,12 @@
 use std::{
-    borrow::Borrow,
     io::{Cursor, Read, Seek, SeekFrom, Write},
     num::NonZero,
     ops::BitOr,
+    sync::Arc,
 };
 
 use crate::{
     ReadLe,
-    client::Connection,
     error::{ErrorResponse2, ServerError},
     file::{
         close::{CloseRequest, CloseResponse},
@@ -18,8 +17,6 @@ use crate::{
         MessageBody, ReadError as MsgReadError, Validation, WriteError, read_202_message,
         write_202_message,
     },
-    session::Session202,
-    sync::Access,
     tree::TreeConnection,
 };
 
@@ -27,14 +24,8 @@ mod close;
 mod read;
 
 #[derive(Debug)]
-pub struct FileHandle<
-    'tree,
-    Session: Borrow<Session202<Con, Stream, Client>>,
-    Con: Borrow<Connection<Client, Stream>>,
-    Stream: Access,
-    Client,
-> {
-    tree_connection: &'tree TreeConnection<Session, Con, Stream, Client>,
+pub struct FileHandle {
+    tree_connection: Arc<TreeConnection>,
     id: FileId,
     oplock_level: Option<OplockLevel202>,
     offset: u64,
@@ -45,18 +36,12 @@ pub struct FileHandle<
     last_write_time: u64,
     change_time: u64,
 }
-impl<
-    Session: Borrow<Session202<Con, Stream, Client>>,
-    Con: Borrow<Connection<Client, Stream>>,
-    Stream: Access,
-    Client,
-> FileHandle<'_, Session, Con, Stream, Client>
-{
-    pub(crate) fn new<'tree>(
-        tree_connection: &'tree TreeConnection<Session, Con, Stream, Client>,
+impl FileHandle {
+    pub(crate) fn new(
+        tree_connection: Arc<TreeConnection>,
         path: &str,
-    ) -> Result<FileHandle<'tree, Session, Con, Stream, Client>, OpenError> {
-        let header = SyncHeader202Outgoing::from_tree_con(tree_connection, Command202::Create);
+    ) -> Result<FileHandle, OpenError> {
+        let header = SyncHeader202Outgoing::from_tree_con(&tree_connection, Command202::Create);
         let request_body = FileCreateRequest {
             oplock_level: None,
             impersonation_level: ImpersonationLevel::Impersonation,
@@ -75,7 +60,7 @@ impl<
             .requires_signing()
             .then_some(session.session_key())
             .copied();
-        let mut lock = session.connection.borrow().inner.lock_mut();
+        let mut lock = session.connection.inner.lock().unwrap();
         write_202_message(lock.stream_mut(), key, header, &request_body, false).unwrap();
         let (header, body) = read_202_message(lock.stream_mut(), Validation::from(key)).unwrap();
         drop(lock);
@@ -112,13 +97,13 @@ impl<
         length: u32,
         minimum_count: u32,
     ) -> Result<Box<[u8]>, ReadFileError> {
-        let header = SyncHeader202Outgoing::from_tree_con(self.tree_connection, Command202::Read);
+        let header = SyncHeader202Outgoing::from_tree_con(&self.tree_connection, Command202::Read);
         let session = self.tree_connection.session();
         let key = session
             .requires_signing()
             .then_some(session.session_key())
             .copied();
-        let mut lock = session.connection.borrow().inner.lock_mut();
+        let mut lock = session.connection.inner.lock().unwrap();
         write_202_message(
             lock.stream_mut(),
             key,
@@ -154,13 +139,13 @@ impl<
         }
     }
     fn send_close(&mut self) -> Result<(), std::io::Error> {
-        let header = SyncHeader202Outgoing::from_tree_con(self.tree_connection, Command202::Close);
+        let header = SyncHeader202Outgoing::from_tree_con(&self.tree_connection, Command202::Close);
         let session = self.tree_connection.session();
         let session_key = session
             .requires_signing()
             .then_some(session.session_key())
             .copied();
-        let mut lock = session.connection.borrow().inner.lock_mut();
+        let mut lock = session.connection.inner.lock().unwrap();
         write_202_message(
             lock.stream_mut(),
             session_key,
@@ -182,24 +167,12 @@ impl<
         self.send_close()
     }
 }
-impl<
-    Session: Borrow<Session202<Con, Stream, Client>>,
-    Con: Borrow<Connection<Client, Stream>>,
-    Stream: Access,
-    Client,
-> Drop for FileHandle<'_, Session, Con, Stream, Client>
-{
+impl Drop for FileHandle {
     fn drop(&mut self) {
         let _ = self.send_close();
     }
 }
-impl<
-    Session: Borrow<Session202<Con, Stream, Client>>,
-    Con: Borrow<Connection<Client, Stream>>,
-    Stream: Access,
-    Client,
-> Read for FileHandle<'_, Session, Con, Stream, Client>
-{
+impl Read for FileHandle {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let until_end = (self.end_of_file - self.offset)
             .try_into()
@@ -231,13 +204,7 @@ impl<
         }
     }
 }
-impl<
-    Session: Borrow<Session202<Con, Stream, Client>>,
-    Con: Borrow<Connection<Client, Stream>>,
-    Stream: Access,
-    Client,
-> Seek for FileHandle<'_, Session, Con, Stream, Client>
-{
+impl Seek for FileHandle {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
         let new = match pos {
             SeekFrom::Start(s) => s,

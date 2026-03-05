@@ -58,9 +58,6 @@ impl MessageBody for ReadRequest {
 pub struct ReadResponse(Box<[u8]>);
 impl ReadResponse {
     const STRUCTURE_SIZE: u16 = 17;
-    pub fn as_slice(&self) -> &[u8] {
-        &self.0
-    }
     pub fn into_inner(self) -> Box<[u8]> {
         self.0
     }

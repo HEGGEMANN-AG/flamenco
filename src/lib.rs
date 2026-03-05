@@ -9,7 +9,6 @@ mod negotiate;
 pub mod session;
 mod share_name;
 mod sign;
-pub mod sync;
 pub mod tree;
 
 trait ReadLe: Read {

@@ -1,10 +1,8 @@
 use std::{
-    borrow::Borrow,
-    cell::RefCell,
     io::Cursor,
     net::{TcpStream, ToSocketAddrs},
     num::NonZero,
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 
 use kenobi::cred::{Credentials, Outbound};
@@ -16,7 +14,6 @@ use crate::{
     negotiate::{Dialect, NegotiateError, NegotiateRequest202, NegotiateResponse},
     session::{Session202, SessionSetupError},
     sign::SecurityMode,
-    sync::Access,
 };
 
 const MINIMUM_TRANSACT_SIZE: u32 = 65536;
@@ -35,21 +32,20 @@ pub struct Client202 {
     pub guest_policy: GuestPolicy,
 }
 impl Client202 {
-    pub fn new(require_signing: bool) -> Self {
+    pub fn new(require_signing: bool) -> Arc<Self> {
         Self {
             requires_signing: require_signing,
             ..Default::default()
         }
+        .into()
     }
     pub fn connect(
-        &self,
+        self: Arc<Self>,
         addr: impl ToSocketAddrs,
-    ) -> Result<Connection<&Client202, RefCell<ConnectionInner>>, ConnectError> {
+    ) -> Result<Arc<Connection>, ConnectError> {
         Connection::new(self, addr)
     }
 }
-
-pub type SharedConnection<Client> = Connection<Client, Mutex<ConnectionInner>>;
 
 #[derive(Debug)]
 pub struct ConnectionInner {
@@ -68,32 +64,38 @@ impl ConnectionInner {
 }
 
 #[derive(Debug)]
-pub struct Connection<Client, Stream> {
-    pub(crate) client: Client,
-    pub(crate) inner: Stream,
-    max_transact_size: u32,
+pub struct Connection {
+    pub(crate) client: Arc<Client202>,
+    pub(crate) inner: Mutex<ConnectionInner>,
+    max_transaction_size: u32,
     max_read_size: u32,
     max_write_size: u32,
     server_requires_signing: bool,
 }
-impl<Stream, Client> Connection<Client, Stream> {
+impl Connection {
+    pub fn max_transaction_size(&self) -> u32 {
+        self.max_transaction_size
+    }
+    pub fn max_read_size(&self) -> u32 {
+        self.max_read_size
+    }
+    pub fn max_write_size(&self) -> u32 {
+        self.max_write_size
+    }
     pub fn server_requires_signing(&self) -> bool {
         self.server_requires_signing
     }
-}
-impl<Stream: Access, Client: Borrow<Client202>> Connection<Client, Stream> {
-    pub fn setup_session<'con>(
-        &'con self,
+    pub fn setup_session(
+        self: Arc<Self>,
         credentials: &Credentials<Outbound>,
         target_spn: Option<&str>,
-    ) -> Result<Session202<&'con Connection<Client, Stream>, Stream, Client>, SessionSetupError>
-    {
+    ) -> Result<Arc<Session202>, SessionSetupError> {
         Session202::new(self, credentials, target_spn)
     }
     pub fn new(
-        client: Client,
+        client: Arc<Client202>,
         addr: impl ToSocketAddrs,
-    ) -> Result<Connection<Client, Stream>, ConnectError> {
+    ) -> Result<Arc<Connection>, ConnectError> {
         let mut tcp = TcpStream::connect(addr)?;
         let neg_header = SyncHeader202Outgoing {
             command: Command202::Negotiate,
@@ -133,12 +135,13 @@ impl<Stream: Access, Client: Borrow<Client202>> Connection<Client, Stream> {
 
         Ok(Connection {
             client,
-            inner: Stream::new(ConnectionInner { message_id: 1, tcp }),
-            max_transact_size: neg_resp.max_transact_size,
+            inner: Mutex::new(ConnectionInner { message_id: 1, tcp }),
+            max_transaction_size: neg_resp.max_transact_size,
             max_read_size: neg_resp.max_read_size,
             max_write_size: neg_resp.max_write_size,
             server_requires_signing,
-        })
+        }
+        .into())
     }
 }
 
