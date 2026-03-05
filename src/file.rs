@@ -153,14 +153,17 @@ impl FileHandle {
             &CloseRequest { id: self.id },
             false,
         )
-        .unwrap();
+        .map_err(|e| match e {
+            WriteError::Connection(io) => io,
+            WriteError::MessageTooLong => unreachable!(),
+        })?;
         let (header, body) =
             read_202_message(lock.stream_mut(), Validation::from(session_key)).unwrap();
         drop(lock);
         if let Some(code) = NonZero::new(header.status) {
             panic!("Error with code {code}");
         }
-        let _body = CloseResponse::read_from(body.as_ref()).unwrap();
+        let _body = CloseResponse::read_from(body.as_ref());
         Ok(())
     }
     pub fn close(mut self) -> Result<(), std::io::Error> {
