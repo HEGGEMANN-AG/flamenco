@@ -172,15 +172,15 @@ impl Drop for FileHandle {
         let _ = self.send_close();
     }
 }
-const SMB2_READ_MAX: u64 = 65536;
 impl Read for FileHandle {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let until_end = self.end_of_file - self.offset;
-        let maximum_readable = until_end.min(SMB2_READ_MAX) as u32;
+        let max_read_size = self.tree_connection.session().connection.max_read_size();
+        let maximum_readable = until_end.min(max_read_size.into()) as u32;
         let len = buf
             .len()
             .try_into()
-            .unwrap_or(u32::MAX)
+            .unwrap_or(maximum_readable)
             .min(maximum_readable);
         match self.read_raw(len, 0) {
             Ok(outbuf) => {
