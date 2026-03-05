@@ -193,6 +193,7 @@ impl<
         let _ = self.send_close();
     }
 }
+const SMB2_READ_MAX: u64 = 65536;
 impl<
     Session: Borrow<Session202<Con, Stream, Client>>,
     Con: Borrow<Connection<Client, Stream>>,
@@ -201,10 +202,13 @@ impl<
 > Read for FileHandle<'_, Session, Con, Stream, Client>
 {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let until_end = (self.end_of_file - self.offset)
+        let until_end = self.end_of_file - self.offset;
+        let maximum_readable = until_end.min(SMB2_READ_MAX) as u32;
+        let len = buf
+            .len()
             .try_into()
-            .unwrap_or(u32::MAX);
-        let len = buf.len().try_into().unwrap_or(u32::MAX).min(until_end);
+            .unwrap_or(u32::MAX)
+            .min(maximum_readable);
         match self.read_raw(len, 0) {
             Ok(outbuf) => {
                 assert!(outbuf.len() <= len as usize);
@@ -213,21 +217,6 @@ impl<
                 Ok(outbuf.len())
             }
             Err(rd) => Err(rd.collapse_to_io_error()),
-        }
-    }
-    fn read_exact(&mut self, buf: &mut [u8]) -> std::io::Result<()> {
-        let until_end = (self.end_of_file - self.offset)
-            .try_into()
-            .unwrap_or(u32::MAX);
-        let len = buf.len().try_into().unwrap_or(u32::MAX).min(until_end);
-        match self.read_raw(len, len) {
-            Ok(outbuf) => {
-                assert!(outbuf.len() <= len as usize);
-                self.offset += outbuf.len() as u64;
-                buf[0..outbuf.len()].copy_from_slice(&outbuf);
-                Ok(())
-            }
-            Err(rf) => Err(rf.collapse_to_io_error()),
         }
     }
 }
