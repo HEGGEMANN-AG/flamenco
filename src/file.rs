@@ -174,9 +174,9 @@ impl Drop for FileHandle {
 }
 impl Read for FileHandle {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let until_end = self.end_of_file - self.offset;
-        let max_read_size = self.tree_connection.session().connection.max_read_size();
-        let maximum_readable = until_end.min(max_read_size.into()) as u32;
+        let remaining = self.end_of_file - self.offset;
+        let connection_max_read = self.tree_connection.session().connection.max_read_size();
+        let maximum_readable = remaining.min(connection_max_read.into()) as u32;
         let len = buf
             .len()
             .try_into()
