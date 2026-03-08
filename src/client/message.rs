@@ -21,9 +21,9 @@ use crate::{
 };
 
 pub struct UnparsedMessage {
-    pub header: Arc<SyncHeader202Incoming>,
+    pub header: SyncHeader202Incoming,
     pub content: Arc<[u8]>,
-    pub signature_verifier: Validator,
+    pub signature_validator: Validator,
 }
 
 /// Signature validation and netBIOS stuff should be happening here
@@ -56,83 +56,108 @@ pub async fn read_202_message<R: AsyncRead + Unpin>(
         .await
         .map_err(ReadError::Connection)?;
     let content: Arc<[u8]> = Arc::from(message_body);
-    let header = Arc::new(header);
     let body = content.clone();
-    let signature_verifier = Validator {
-        header_bytes,
-        body,
-        header: header.clone(),
-        incoming_key,
-    };
+    let signature_validator = Validator::new(&header, incoming_key, header_bytes, body);
     Ok(UnparsedMessage {
         header,
         content,
-        signature_verifier,
+        signature_validator,
     })
 }
 
 pub struct Validator {
     header_bytes: [u8; 64],
     body: Arc<[u8]>,
-    header: Arc<SyncHeader202Incoming>,
+    message_id: u64,
+    signature: [u8; 16],
+    flags: u32,
+    status: u32,
+
     incoming_key: Receiver<Option<[u8; 16]>>,
+}
+impl Validator {
+    fn new(
+        header: &SyncHeader202Incoming,
+        incoming_key: Receiver<Option<[u8; 16]>>,
+        header_bytes: [u8; 64],
+        body: Arc<[u8]>,
+    ) -> Self {
+        Self {
+            header_bytes,
+            body,
+            message_id: header.message_id,
+            signature: header.signature,
+            flags: header.flags,
+            status: header.status,
+            incoming_key,
+        }
+    }
 }
 impl Future for Validator {
     type Output = Result<(), ValidationError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let sig = self.signature;
+        let mid = self.message_id;
+        let flags = self.flags;
+        let status = self.status;
         let this = &mut *self;
         let incoming_key = &mut this.incoming_key;
         let header_bytes = &mut this.header_bytes;
-        let header = &this.header;
         let body = &this.body;
         match Pin::new(incoming_key).poll(cx) {
             Poll::Ready(Ok(key)) => Poll::Ready(match key {
                 None => Ok(()),
-                Some(key) => validate_to_error(header, &key, header_bytes, body),
+                Some(key) => {
+                    Self::validate_to_error(key, sig, mid, flags, status, header_bytes, body)
+                }
             }),
             Poll::Ready(Err(_)) => Poll::Ready(Err(ValidationError::ChannelClosed)),
             Poll::Pending => Poll::Pending,
         }
     }
 }
-
-fn validate_to_error(
-    header: &SyncHeader202Incoming,
-    key: &[u8; 16],
-    header_bytes: &mut [u8],
-    body_bytes: &[u8],
-) -> Result<(), ValidationError> {
-    let is_signed = header.flags & FLAG_SIGNED != 0;
-    if header.message_id != u64::MAX && header.status != STATUS_PENDING {
-        if !is_signed {
-            Err(ValidationError::NotSigned)
-        } else if validate_signature(key, &header.signature, header_bytes, body_bytes) {
-            Ok(())
+impl Validator {
+    fn validate_to_error(
+        key: [u8; 16],
+        signature: [u8; 16],
+        message_id: u64,
+        flags: u32,
+        status: u32,
+        header_bytes: &mut [u8],
+        body_bytes: &[u8],
+    ) -> Result<(), ValidationError> {
+        let is_signed = flags & FLAG_SIGNED != 0;
+        if message_id != u64::MAX && status != STATUS_PENDING {
+            if !is_signed {
+                Err(ValidationError::NotSigned)
+            } else if Self::validate_signature(key, signature, header_bytes, body_bytes) {
+                Ok(())
+            } else {
+                Err(ValidationError::InvalidSignature)
+            }
         } else {
-            Err(ValidationError::InvalidSignature)
+            Ok(())
         }
-    } else {
-        Ok(())
+    }
+    fn validate_signature(
+        key: [u8; 16],
+        sig: [u8; 16],
+        header_bytes: &mut [u8],
+        body_bytes: &[u8],
+    ) -> bool {
+        header_bytes[48..64].fill(0);
+        let mut hasher = Hmac::<Sha256>::new_from_slice(&key).unwrap();
+        hasher.update(header_bytes);
+        hasher.update(body_bytes);
+        hasher.finalize().into_bytes()[0..16] == sig
     }
 }
+
 pub enum ValidationError {
     NotSigned,
     InvalidSignature,
     ChannelClosed,
-}
-
-fn validate_signature(
-    key: &[u8; 16],
-    sig: &[u8; 16],
-    header_bytes: &mut [u8],
-    body_bytes: &[u8],
-) -> bool {
-    header_bytes[48..64].fill(0);
-    let mut hasher = Hmac::<Sha256>::new_from_slice(key).unwrap();
-    hasher.update(header_bytes);
-    hasher.update(body_bytes);
-    hasher.finalize().into_bytes()[0..16] == *sig
 }
 
 /// Sets the SIGNED flag depending on the signing key being provided

@@ -64,7 +64,7 @@ impl Client202 {
     }
 }
 
-type OutstandingRequests = HashMap<u64, Sender<(Arc<SyncHeader202Incoming>, Arc<[u8]>)>>;
+type OutstandingRequests = HashMap<u64, Sender<(SyncHeader202Incoming, Arc<[u8]>)>>;
 type OpenSessions = HashMap<NonZero<u64>, Weak<Session202>>;
 
 #[derive(Debug)]
@@ -87,7 +87,7 @@ impl Connection {
         msg: &impl MessageBody,
         add_null: bool,
         key: Option<[u8; 16]>,
-    ) -> Result<(Arc<SyncHeader202Incoming>, Arc<[u8]>), crate::message::WriteError> {
+    ) -> Result<(SyncHeader202Incoming, Arc<[u8]>), crate::message::WriteError> {
         let mut wtcp = self.write_tcp.lock().await;
         Self::signup_message_raw(
             self.outstanding_requests.clone(),
@@ -214,7 +214,7 @@ impl Connection {
         msg: &impl MessageBody,
         add_null: bool,
         key: Option<[u8; 16]>,
-    ) -> Result<(Arc<SyncHeader202Incoming>, Arc<[u8]>), crate::message::WriteError> {
+    ) -> Result<(SyncHeader202Incoming, Arc<[u8]>), crate::message::WriteError> {
         let next_message_id = id.fetch_add(1, Ordering::Relaxed);
         header.message_id = next_message_id;
         let (sx, rx) = tokio::sync::oneshot::channel();
@@ -240,7 +240,7 @@ impl Connection {
             let UnparsedMessage {
                 header,
                 content,
-                signature_verifier,
+                signature_validator: signature_verifier,
             } = match read_result {
                 Ok(v) => v,
                 Err(ReadError::Connection(io)) if io.kind() == ErrorKind::ConnectionReset => {
