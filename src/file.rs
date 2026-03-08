@@ -115,6 +115,9 @@ impl FileHandle {
             future: None,
         })
     }
+    pub fn length(&self) -> u64 {
+        self.end_of_file
+    }
     pub async fn read_raw(
         tree_connection: Arc<TreeConnection>,
         id: FileId,
