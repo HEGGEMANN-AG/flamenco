@@ -23,7 +23,7 @@ use tokio::{
 use kenobi::cred::{Credentials, Outbound};
 
 use crate::{
-    client::message::UnparsedMessage,
+    client::message::IncomingMessage,
     error::{ErrorResponse2, ServerError},
     header::{Command202, SyncHeader202Incoming, SyncHeader202Outgoing},
     message::{MessageBody, ReadError, WriteError},
@@ -246,7 +246,7 @@ impl Connection {
                     return;
                 }
             };
-            let UnparsedMessage {
+            let IncomingMessage {
                 header,
                 content,
                 signature_validator,

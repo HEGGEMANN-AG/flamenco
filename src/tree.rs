@@ -43,7 +43,7 @@ impl TreeConnection {
         if let Some(code) = NonZero::new(header.status) {
             return Err(ServerError::handle_error_body(code, &msg));
         }
-        let response = TreeConnectResponse::read_from(&mut Cursor::new(msg)).await?;
+        let response = TreeConnectResponse::read_from(&mut Cursor::new(msg))?;
         let tree = TreeConnection {
             session,
             share_type: response.share_type,
@@ -64,7 +64,7 @@ impl TreeConnection {
         else {
             return;
         };
-        let _ = TreeDisconnectResponse::read_from(&mut body.as_ref()).await;
+        let _ = TreeDisconnectResponse::read_from(&mut body.as_ref());
     }
     pub(crate) fn session(&self) -> &Session202 {
         self.session.borrow()
@@ -185,7 +185,7 @@ struct TreeConnectResponse {
     maximal_access: u32,
 }
 impl TreeConnectResponse {
-    async fn read_from<R: Read + Seek>(r: &mut R) -> Result<Self, ReadError> {
+    fn read_from<R: Read + Seek>(r: &mut R) -> Result<Self, ReadError> {
         if r.read_u16_le()? != 16 {
             return Err(ReadError::InvalidSize);
         }
@@ -247,7 +247,7 @@ impl MessageBody for TreeDisconnectRequest {
 #[derive(Clone, Copy, Debug)]
 struct TreeDisconnectResponse;
 impl TreeDisconnectResponse {
-    async fn read_from<R: Read>(r: &mut R) -> Result<Self, ReadDisconnectError> {
+    fn read_from<R: Read>(r: &mut R) -> Result<Self, ReadDisconnectError> {
         if r.read_u16_le()? != 4 {
             return Err(ReadDisconnectError::InvalidSize);
         };

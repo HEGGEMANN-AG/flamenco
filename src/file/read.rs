@@ -58,7 +58,7 @@ impl ReadResponse {
     pub fn into_inner(self) -> Box<[u8]> {
         self.0
     }
-    pub async fn read_from<R: Read + Seek>(mut r: R) -> Result<Self, ReadResponseError> {
+    pub fn read_from<R: Read + Seek>(mut r: R) -> Result<Self, ReadResponseError> {
         if r.read_u16_le()? != Self::STRUCTURE_SIZE {
             return Err(ReadResponseError::InvalidMessage);
         }

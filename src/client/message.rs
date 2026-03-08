@@ -20,7 +20,7 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub struct UnparsedMessage {
+pub struct IncomingMessage {
     pub header: Arc<SyncHeader202Incoming>,
     pub content: Arc<[u8]>,
     pub signature_validator: Validator,
@@ -29,7 +29,7 @@ pub struct UnparsedMessage {
 pub async fn read_202_message<R: AsyncRead + Unpin>(
     r: &mut R,
     validation_ctx_receiver: Receiver<ValidationContext>,
-) -> Result<UnparsedMessage, ReadError> {
+) -> Result<IncomingMessage, ReadError> {
     let mut bios_size = [0u8; 4];
     r.read_exact(&mut bios_size)
         .await
@@ -59,7 +59,7 @@ pub async fn read_202_message<R: AsyncRead + Unpin>(
     let header = Arc::new(header);
     let signature_validator =
         Validator::new(header.clone(), validation_ctx_receiver, header_bytes, body);
-    Ok(UnparsedMessage {
+    Ok(IncomingMessage {
         header,
         content,
         signature_validator,

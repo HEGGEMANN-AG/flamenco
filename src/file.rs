@@ -149,7 +149,7 @@ impl FileHandle {
         if let Some(code) = NonZero::new(header.status) {
             return Err(ServerError::handle_error_body(code, &body));
         }
-        match ReadResponse::read_from(Cursor::new(body)).await {
+        match ReadResponse::read_from(Cursor::new(body)) {
             Ok(ok) => Ok(ok.into_inner()),
             Err(ReadResponseError::Io(io)) => Err(ReadFileError::Io(io)),
             Err(ReadResponseError::InvalidMessage) => Err(ReadFileError::InvalidMessage),
@@ -176,7 +176,7 @@ impl FileHandle {
         if let Some(code) = NonZero::new(header.status) {
             panic!("Error with code {code}");
         }
-        let _body = CloseResponse::read_from(&mut body.as_ref()).await.unwrap();
+        let _body = CloseResponse::read_from(&mut body.as_ref()).unwrap();
         Ok(())
     }
     pub async fn close(mut self) -> Result<(), std::io::Error> {

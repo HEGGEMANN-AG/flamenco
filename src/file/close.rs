@@ -35,7 +35,7 @@ pub struct CloseResponse {
     pub end_of_file: u64,
 }
 impl CloseResponse {
-    pub(crate) async fn read_from<R: Read>(r: &mut R) -> Result<Self, ReadCloseError> {
+    pub(crate) fn read_from<R: Read>(r: &mut R) -> Result<Self, ReadCloseError> {
         if r.read_u16_le()? != 60 {
             return Err(ReadCloseError::InvalidStructureSize);
         }
