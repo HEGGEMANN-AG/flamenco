@@ -266,8 +266,8 @@ impl Connection {
                     continue;
                 }
                 let message_id = header.message_id;
-                let sender = outstanding_requests.lock().await.remove(&message_id);
-                let Some(message_sender) = sender else {
+                let Some(message_sender) = outstanding_requests.lock().await.remove(&message_id)
+                else {
                     eprintln!("Message request not found");
                     continue;
                 };
