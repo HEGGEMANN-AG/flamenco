@@ -132,19 +132,15 @@ impl FileHandle {
             .requires_signing()
             .then_some(session.session_key())
             .copied();
+        let req = ReadRequest {
+            length,
+            offset,
+            id,
+            minimum_count,
+        };
         let (header, body) = session
             .connection
-            .signup_message(
-                header,
-                &ReadRequest {
-                    length,
-                    offset,
-                    id,
-                    minimum_count,
-                },
-                true,
-                key,
-            )
+            .signup_message(header, &req, true, key)
             .await
             .map_err(|w| match w {
                 WriteError::Connection(error) => ReadFileError::Io(error),
