@@ -1,32 +1,27 @@
-use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use std::io::{Read, Write};
 
-use crate::{file::FileId, message::MessageBody};
+use crate::{ReadIntLe, file::FileId, message::MessageBody};
 
 #[derive(Clone, Copy, Debug)]
 pub struct CloseRequest {
     pub id: FileId,
-}
-impl CloseRequest {
-    async fn write_into<W: AsyncWrite + Unpin>(&self, w: &mut W) -> Result<(), std::io::Error> {
-        w.write_all(&24u16.to_le_bytes()).await?;
-        w.write_all(&0u16.to_le_bytes()).await?;
-        w.write_all(&0u32.to_le_bytes()).await?;
-        let FileId {
-            persistent,
-            volatile,
-        } = self.id;
-        w.write_all(&persistent).await?;
-        w.write_all(&volatile).await?;
-        Ok(())
-    }
 }
 impl MessageBody for CloseRequest {
     type Err = std::io::Error;
     fn size_hint(&self) -> usize {
         24
     }
-    async fn write_to<W: AsyncWrite + Unpin>(&self, w: &mut W) -> Result<(), Self::Err> {
-        self.write_into(w).await
+    fn write_to<W: Write>(&self, w: &mut W) -> Result<(), Self::Err> {
+        w.write_all(&24u16.to_le_bytes())?;
+        w.write_all(&0u16.to_le_bytes())?;
+        w.write_all(&0u32.to_le_bytes())?;
+        let FileId {
+            persistent,
+            volatile,
+        } = self.id;
+        w.write_all(&persistent)?;
+        w.write_all(&volatile)?;
+        Ok(())
     }
 }
 
@@ -40,20 +35,18 @@ pub struct CloseResponse {
     pub end_of_file: u64,
 }
 impl CloseResponse {
-    pub(crate) async fn read_from<R: AsyncReadExt + Unpin>(
-        r: &mut R,
-    ) -> Result<Self, ReadCloseError> {
-        if r.read_u16_le().await? != 60 {
+    pub(crate) async fn read_from<R: Read>(r: &mut R) -> Result<Self, ReadCloseError> {
+        if r.read_u16_le()? != 60 {
             return Err(ReadCloseError::InvalidStructureSize);
         }
-        let _flags = r.read_u16_le().await?;
-        let creation_time = r.read_u64_le().await?;
-        let last_access_time = r.read_u64_le().await?;
-        let last_write_time = r.read_u64_le().await?;
-        let change_time = r.read_u64_le().await?;
-        let allocation_size = r.read_u64_le().await?;
-        let end_of_file = r.read_u64_le().await?;
-        let _file_attributes = r.read_u32_le().await?;
+        let _flags = r.read_u16_le()?;
+        let creation_time = r.read_u64_le()?;
+        let last_access_time = r.read_u64_le()?;
+        let last_write_time = r.read_u64_le()?;
+        let change_time = r.read_u64_le()?;
+        let allocation_size = r.read_u64_le()?;
+        let end_of_file = r.read_u64_le()?;
+        let _file_attributes = r.read_u32_le()?;
         Ok(Self {
             creation_time,
             last_access_time,

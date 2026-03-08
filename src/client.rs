@@ -186,7 +186,7 @@ impl Connection {
         if header.command != Command202::Negotiate || header.message_id != 0 {
             return Err(ConnectError::InvalidMessage);
         }
-        let neg_resp = NegotiateResponse::read_from(&mut Cursor::new(body)).await?;
+        let neg_resp = NegotiateResponse::read_from(&mut Cursor::new(body))?;
         if neg_resp.max_transact_size < MINIMUM_TRANSACT_SIZE
             || neg_resp.max_read_size < MINIMUM_TRANSACT_SIZE
             || neg_resp.max_write_size < MINIMUM_TRANSACT_SIZE

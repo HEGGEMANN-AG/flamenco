@@ -1,13 +1,12 @@
 use std::{
     borrow::Borrow,
-    io::{Cursor, SeekFrom},
+    io::{Cursor, Read, Seek, SeekFrom, Write},
     num::NonZero,
     sync::Arc,
 };
 
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
-
 use crate::{
+    ReadIntLe,
     error::{ErrorResponse2, ServerError},
     file::{FileHandle, OpenError},
     header::{Command202, SyncHeader202Outgoing},
@@ -151,23 +150,20 @@ pub enum InvalidSharePath {
 struct TreeConnectRequest<'s>(&'s str);
 impl TreeConnectRequest<'_> {
     const STRUCTURE_SIZE: u16 = 9;
-    async fn write_into<W: AsyncWriteExt + Unpin>(&self, w: &mut W) -> Result<(), WriteError> {
-        w.write_all(&Self::STRUCTURE_SIZE.to_le_bytes()).await?;
-        w.write_all(&0u16.to_le_bytes()).await?;
-        let utf16 = crate::to_wide(self.0);
-        w.write_all(&(64 + 8u16).to_le_bytes()).await?;
-        w.write_all(&(utf16.len() as u16).to_le_bytes()).await?;
-        w.write_all(&utf16).await?;
-        Ok(())
-    }
 }
 impl MessageBody for TreeConnectRequest<'_> {
     type Err = WriteError;
     fn size_hint(&self) -> usize {
         8 + (self.0.len() * 2)
     }
-    async fn write_to<W: AsyncWriteExt + Unpin>(&self, w: &mut W) -> Result<(), Self::Err> {
-        self.write_into(w).await
+    fn write_to<W: Write>(&self, w: &mut W) -> Result<(), Self::Err> {
+        w.write_all(&Self::STRUCTURE_SIZE.to_le_bytes())?;
+        w.write_all(&0u16.to_le_bytes())?;
+        let utf16 = crate::to_wide(self.0);
+        w.write_all(&(64 + 8u16).to_le_bytes())?;
+        w.write_all(&(utf16.len() as u16).to_le_bytes())?;
+        w.write_all(&utf16)?;
+        Ok(())
     }
 }
 
@@ -189,25 +185,23 @@ struct TreeConnectResponse {
     maximal_access: u32,
 }
 impl TreeConnectResponse {
-    async fn read_from<R: AsyncReadExt + AsyncSeekExt + Unpin>(
-        r: &mut R,
-    ) -> Result<Self, ReadError> {
-        if r.read_u16_le().await? != 16 {
+    async fn read_from<R: Read + Seek>(r: &mut R) -> Result<Self, ReadError> {
+        if r.read_u16_le()? != 16 {
             return Err(ReadError::InvalidSize);
         }
         let mut share = 0;
-        r.read_exact(std::slice::from_mut(&mut share)).await?;
+        r.read_exact(std::slice::from_mut(&mut share))?;
         let share_type = match share {
             0x01 => ShareType::Disk,
             0x02 => ShareType::Pipe,
             0x03 => ShareType::Printer,
             _ => return Err(ReadError::InvalidShareType),
         };
-        r.seek(SeekFrom::Current(1)).await?;
-        let flags = r.read_u32_le().await?;
+        r.seek(SeekFrom::Current(1))?;
+        let flags = r.read_u32_le()?;
         // Todo cache check
-        let capabilities = r.read_u32_le().await?;
-        let maximal_access = r.read_u32_le().await?;
+        let capabilities = r.read_u32_le()?;
+        let maximal_access = r.read_u32_le()?;
         Ok(Self {
             share_type,
             flags,
@@ -238,31 +232,26 @@ pub enum ShareType {
 
 #[derive(Clone, Copy, Debug)]
 struct TreeDisconnectRequest;
-impl TreeDisconnectRequest {
-    async fn write_into<W: AsyncWriteExt + Unpin>(self, w: &mut W) -> Result<(), std::io::Error> {
-        w.write_all(&4u16.to_le_bytes()).await?;
-        w.write_all(&0u16.to_le_bytes()).await?;
-        Ok(())
-    }
-}
 impl MessageBody for TreeDisconnectRequest {
     type Err = std::io::Error;
     fn size_hint(&self) -> usize {
         8
     }
-    async fn write_to<W: AsyncWriteExt + Unpin>(&self, w: &mut W) -> Result<(), Self::Err> {
-        (*self).write_into(w).await
+    fn write_to<W: Write>(&self, w: &mut W) -> Result<(), Self::Err> {
+        w.write_all(&4u16.to_le_bytes())?;
+        w.write_all(&0u16.to_le_bytes())?;
+        Ok(())
     }
 }
 
 #[derive(Clone, Copy, Debug)]
 struct TreeDisconnectResponse;
 impl TreeDisconnectResponse {
-    async fn read_from<R: AsyncReadExt + Unpin>(r: &mut R) -> Result<Self, ReadDisconnectError> {
-        if r.read_u16_le().await? != 4 {
+    async fn read_from<R: Read>(r: &mut R) -> Result<Self, ReadDisconnectError> {
+        if r.read_u16_le()? != 4 {
             return Err(ReadDisconnectError::InvalidSize);
         };
-        let _ignored = r.read_u16_le().await?;
+        let _ignored = r.read_u16_le()?;
         Ok(Self)
     }
 }

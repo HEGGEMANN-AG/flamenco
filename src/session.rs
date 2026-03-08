@@ -1,6 +1,6 @@
 use std::{
     fmt::Debug,
-    io::{Cursor, SeekFrom},
+    io::{Cursor, Read, Seek, SeekFrom, Write},
     num::NonZero,
     sync::Arc,
 };
@@ -9,9 +9,9 @@ use kenobi::{
     client::{ClientBuilder, StepOut},
     cred::{Credentials, Outbound},
 };
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
 use crate::{
+    ReadIntLe,
     client::{Connection, GuestPolicy},
     error::{ErrorResponse2, ServerError},
     header::{Command202, SyncHeader202Outgoing},
@@ -91,7 +91,7 @@ impl Session202 {
                 return Err(SessionSetupError::handle_error_body(code, &body));
             }
             let SessionSetupResponse { flags, sec_buffer } =
-                SessionSetupResponse::read_from(Cursor::new(body)).await?;
+                SessionSetupResponse::read_from(Cursor::new(body))?;
 
             auth_context = match auth_context.step(&sec_buffer) {
                 StepOut::Pending(p) => p,
@@ -221,33 +221,28 @@ struct SessionSetupRequest<'buf> {
     pub previous_session_id: u64,
     pub buffer: &'buf [u8],
 }
-impl SessionSetupRequest<'_> {
-    async fn write_into<W: AsyncWriteExt + Unpin>(&self, w: &mut W) -> Result<(), WriteError> {
-        w.write_all(&25u16.to_le_bytes()).await?;
+impl MessageBody for SessionSetupRequest<'_> {
+    type Err = WriteError;
+    fn write_to<W: Write>(&self, w: &mut W) -> Result<(), Self::Err> {
+        w.write_all(&25u16.to_le_bytes())?;
         // flags
-        w.write_all(&[0]).await?;
+        w.write_all(&[0])?;
         // security mode
-        w.write_all(&[self.security_mode.to_value()]).await?;
-        w.write_all(&self.capabilities.to_le_bytes()).await?;
+        w.write_all(&[self.security_mode.to_value()])?;
+        w.write_all(&self.capabilities.to_le_bytes())?;
         // channel
-        w.write_all(&0u32.to_le_bytes()).await?;
+        w.write_all(&0u32.to_le_bytes())?;
 
         let secbuf_offset: u16 = 64 + 24;
-        w.write_all(&secbuf_offset.to_le_bytes()).await?;
+        w.write_all(&secbuf_offset.to_le_bytes())?;
         let Ok(secbuf_len): Result<u16, _> = self.buffer.len().try_into() else {
             return Err(WriteError::BufferTooLong);
         };
-        w.write_all(&secbuf_len.to_le_bytes()).await?;
+        w.write_all(&secbuf_len.to_le_bytes())?;
 
-        w.write_all(&self.previous_session_id.to_le_bytes()).await?;
-        w.write_all(self.buffer).await?;
+        w.write_all(&self.previous_session_id.to_le_bytes())?;
+        w.write_all(self.buffer)?;
         Ok(())
-    }
-}
-impl MessageBody for SessionSetupRequest<'_> {
-    type Err = WriteError;
-    async fn write_to<W: AsyncWriteExt + Unpin>(&self, w: &mut W) -> Result<(), Self::Err> {
-        SessionSetupRequest::write_into(self, w).await
     }
     fn size_hint(&self) -> usize {
         24 + self.buffer.len()
@@ -273,23 +268,21 @@ struct SessionSetupResponse {
 }
 impl SessionSetupResponse {
     const STRUCTURE_SIZE: u16 = 9;
-    async fn read_from<R: AsyncReadExt + AsyncSeekExt + Unpin>(
-        mut r: R,
-    ) -> Result<Self, ReadError> {
-        if r.read_u16_le().await? != Self::STRUCTURE_SIZE {
+    fn read_from<R: Read + Seek>(mut r: R) -> Result<Self, ReadError> {
+        if r.read_u16_le()? != Self::STRUCTURE_SIZE {
             return Err(ReadError::InvalidSize);
         }
-        let flags = match r.read_u16_le().await? {
+        let flags = match r.read_u16_le()? {
             0x00 => SessionFlags::None,
             0x01 => SessionFlags::Guest,
             0x02 => SessionFlags::Anonymous,
             _ => return Err(ReadError::InvalidFlags),
         };
-        let secbuf_offset = r.read_u16_le().await?;
-        let secbuf_length = r.read_u16_le().await?;
-        r.seek(SeekFrom::Start((secbuf_offset - 64) as u64)).await?;
+        let secbuf_offset = r.read_u16_le()?;
+        let secbuf_length = r.read_u16_le()?;
+        r.seek(SeekFrom::Start((secbuf_offset - 64) as u64))?;
         let mut sec_buffer = vec![0; secbuf_length as usize].into_boxed_slice();
-        r.read_exact(&mut sec_buffer).await?;
+        r.read_exact(&mut sec_buffer)?;
         Ok(Self { flags, sec_buffer })
     }
 }
@@ -317,9 +310,9 @@ enum SessionFlags {
 struct LogoffRequest;
 impl MessageBody for LogoffRequest {
     type Err = std::io::Error;
-    async fn write_to<W: AsyncWriteExt + Unpin>(&self, w: &mut W) -> Result<(), Self::Err> {
-        w.write_all(&4u32.to_le_bytes()).await?;
-        w.write_all(&0u32.to_le_bytes()).await?;
+    fn write_to<W: Write>(&self, w: &mut W) -> Result<(), Self::Err> {
+        w.write_all(&4u32.to_le_bytes())?;
+        w.write_all(&0u32.to_le_bytes())?;
         Ok(())
     }
     fn size_hint(&self) -> usize {

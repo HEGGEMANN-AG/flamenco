@@ -1,5 +1,5 @@
 use std::{
-    io::{Cursor, SeekFrom},
+    io::{Cursor, Read, SeekFrom, Write},
     num::NonZero,
     ops::BitOr,
     pin::Pin,
@@ -7,9 +7,10 @@ use std::{
     task::{Context, Poll},
 };
 
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncWrite, AsyncWriteExt, ReadBuf};
+use tokio::io::{AsyncRead, AsyncSeek, ReadBuf};
 
 use crate::{
+    ReadIntLe,
     error::{ErrorResponse2, ServerError},
     file::{
         close::{CloseRequest, CloseResponse},
@@ -100,7 +101,7 @@ impl FileHandle {
             end_of_file,
             attributes,
             id,
-        } = CreateResponse::read_from(&mut body.as_ref()).await.unwrap();
+        } = CreateResponse::read_from(&mut body.as_ref()).unwrap();
         Ok(FileHandle {
             oplock_level,
             offset: 0,
@@ -253,51 +254,45 @@ struct FileCreateRequest<'p> {
     create_options: u32,
     path: &'p str,
 }
-impl FileCreateRequest<'_> {
-    async fn write_into<W: AsyncWrite + Unpin>(&self, w: &mut W) -> Result<(), std::io::Error> {
-        w.write_all(&57u16.to_le_bytes()).await?;
-        w.write_all(&[0]).await?;
+impl MessageBody for FileCreateRequest<'_> {
+    type Err = std::io::Error;
+    fn size_hint(&self) -> usize {
+        56 + (self.path.chars().count() * 2)
+    }
+    fn write_to<W: Write>(&self, w: &mut W) -> Result<(), Self::Err> {
+        w.write_all(&57u16.to_le_bytes())?;
+        w.write_all(&[0])?;
         let oplock_byte: u8 = match self.oplock_level {
             None => 0x00,
             Some(OplockLevel202::II) => 0x01,
             Some(OplockLevel202::Exclusive) => 0x08,
             Some(OplockLevel202::Batch) => 0x09,
         };
-        w.write_all(&[oplock_byte]).await?;
+        w.write_all(&[oplock_byte])?;
         let imp_byte: u8 = match self.impersonation_level {
             ImpersonationLevel::Anonymous => 0x00,
             ImpersonationLevel::Identification => 0x01,
             ImpersonationLevel::Impersonation => 0x02,
             ImpersonationLevel::Delegate => 0x03,
         };
-        w.write_all(&u32::from(imp_byte).to_le_bytes()).await?;
-        w.write_all(&0u64.to_le_bytes()).await?;
-        w.write_all(&0u64.to_le_bytes()).await?;
-        w.write_all(&self.desired_access.0.to_le_bytes()).await?;
-        w.write_all(&self.file_attributes.to_le_bytes()).await?;
-        w.write_all(&self.share_access.0.to_le_bytes()).await?;
-        w.write_all(&self.create_disposition.to_u32().to_le_bytes())
-            .await?;
+        w.write_all(&u32::from(imp_byte).to_le_bytes())?;
+        w.write_all(&0u64.to_le_bytes())?;
+        w.write_all(&0u64.to_le_bytes())?;
+        w.write_all(&self.desired_access.0.to_le_bytes())?;
+        w.write_all(&self.file_attributes.to_le_bytes())?;
+        w.write_all(&self.share_access.0.to_le_bytes())?;
+        w.write_all(&self.create_disposition.to_u32().to_le_bytes())?;
         // TODO create options
-        w.write_all(&self.create_options.to_le_bytes()).await?;
+        w.write_all(&self.create_options.to_le_bytes())?;
         let path = crate::to_wide(self.path);
         let offset: u16 = 64 + 56;
-        w.write_all(&offset.to_le_bytes()).await?;
-        w.write_all(&(path.len() as u16).to_le_bytes()).await?;
+        w.write_all(&offset.to_le_bytes())?;
+        w.write_all(&(path.len() as u16).to_le_bytes())?;
         let create_contexts_offset: u32 = 0;
-        w.write_all(&create_contexts_offset.to_le_bytes()).await?;
-        w.write_all(&0u32.to_le_bytes()).await?;
-        w.write_all(&path).await?;
+        w.write_all(&create_contexts_offset.to_le_bytes())?;
+        w.write_all(&0u32.to_le_bytes())?;
+        w.write_all(&path)?;
         Ok(())
-    }
-}
-impl MessageBody for FileCreateRequest<'_> {
-    type Err = std::io::Error;
-    fn size_hint(&self) -> usize {
-        56 + (self.path.chars().count() * 2)
-    }
-    async fn write_to<W: AsyncWrite + Unpin>(&self, w: &mut W) -> Result<(), Self::Err> {
-        self.write_into(w).await
     }
 }
 
@@ -430,12 +425,12 @@ struct CreateResponse {
 }
 impl CreateResponse {
     const STRUCTURE_SIZE: u16 = 89;
-    async fn read_from<R: AsyncReadExt + Unpin>(r: &mut R) -> Result<Self, ReadError> {
-        if r.read_u16_le().await? != Self::STRUCTURE_SIZE {
+    fn read_from<R: Read>(r: &mut R) -> Result<Self, ReadError> {
+        if r.read_u16_le()? != Self::STRUCTURE_SIZE {
             return Err(ReadError::InvalidStructureSize);
         }
         let mut oplock = 0;
-        r.read_exact(std::slice::from_mut(&mut oplock)).await?;
+        r.read_exact(std::slice::from_mut(&mut oplock))?;
         let oplock_level = match oplock {
             0x00 => None,
             0x01 => Some(OplockLevel202::II),
@@ -444,34 +439,34 @@ impl CreateResponse {
             _ => return Err(ReadError::InvalidOplockLevel),
         };
         // flags
-        r.read_exact(&mut [0]).await?;
-        let create_action = match r.read_u32_le().await? {
+        r.read_exact(&mut [0])?;
+        let create_action = match r.read_u32_le()? {
             0x00 => CreateActionTaken::Superseded,
             0x01 => CreateActionTaken::Opened,
             0x02 => CreateActionTaken::Created,
             0x03 => CreateActionTaken::Overwritten,
             _ => return Err(ReadError::InvalidCreateAction),
         };
-        let creation_time = r.read_u64_le().await?;
-        let last_access_time = r.read_u64_le().await?;
-        let last_write_time = r.read_u64_le().await?;
-        let change_time = r.read_u64_le().await?;
-        let allocation_size = r.read_u64_le().await?;
-        let end_of_file = r.read_u64_le().await?;
-        let attributes = r.read_u32_le().await?;
-        let _ = r.read_u32_le().await?;
+        let creation_time = r.read_u64_le()?;
+        let last_access_time = r.read_u64_le()?;
+        let last_write_time = r.read_u64_le()?;
+        let change_time = r.read_u64_le()?;
+        let allocation_size = r.read_u64_le()?;
+        let end_of_file = r.read_u64_le()?;
+        let attributes = r.read_u32_le()?;
+        let _ = r.read_u32_le()?;
         let mut persistent = [0u8; 8];
-        r.read_exact(&mut persistent).await?;
+        r.read_exact(&mut persistent)?;
         let mut volatile = [0u8; 8];
-        r.read_exact(&mut volatile).await?;
+        r.read_exact(&mut volatile)?;
         let id = FileId {
             persistent,
             volatile,
         };
-        let create_contexts_offset = r.read_u32_le().await?;
-        let create_contexts_length = r.read_u32_le().await?;
+        let create_contexts_offset = r.read_u32_le()?;
+        let create_contexts_length = r.read_u32_le()?;
         let mut _ctx = vec![0; (create_contexts_length + create_contexts_offset) as usize];
-        r.read_exact(&mut _ctx).await?;
+        r.read_exact(&mut _ctx)?;
         Ok(CreateResponse {
             oplock_level,
             create_action,
