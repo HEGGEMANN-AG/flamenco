@@ -168,15 +168,19 @@ impl FileHandle {
             .requires_signing()
             .then_some(session.session_key())
             .copied();
-        let (header, body) = session
+        let (header, body) = match session
             .connection
             .signup_message(header, &CloseRequest { id }, false, session_key)
             .await
-            .unwrap();
+        {
+            Ok(t) => t,
+            Err(WriteError::Connection(io)) => return Err(io),
+            Err(WriteError::MessageTooLong) => unreachable!(),
+        };
         if let Some(code) = NonZero::new(header.status) {
             panic!("Error with code {code}");
         }
-        let _body = CloseResponse::read_from(&mut body.as_ref()).unwrap();
+        let _body = CloseResponse::read_from(&mut body.as_ref());
         Ok(())
     }
     pub async fn close(mut self) -> Result<(), std::io::Error> {
