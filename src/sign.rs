@@ -1,5 +1,3 @@
-use crate::header::{FLAG_SIGNED, SyncHeader202Incoming};
-
 #[derive(Debug)]
 pub enum ValidationError {
     InvalidSignature,
@@ -25,33 +23,6 @@ impl std::fmt::Debug for ValidationContext {
             .field("requires_signing", &self.requires_signing)
             .finish()
     }
-}
-
-pub enum ValidationDecision {
-    MustVerify,
-    Skip,
-}
-
-const STATUS_PENDING: u32 = 0x00000103;
-
-pub fn should_enforce_signature_validation(
-    header: &SyncHeader202Incoming,
-    session_requires_signing: bool,
-) -> Result<ValidationDecision, ValidationError> {
-    let is_signed = header.flags & FLAG_SIGNED != 0;
-    let is_async = header.message_id == u64::MAX;
-    let is_interim = is_async || header.status == STATUS_PENDING;
-
-    // Voluntary signing is always verified
-    if is_signed {
-        return Ok(ValidationDecision::MustVerify);
-    }
-
-    if !session_requires_signing || is_interim {
-        return Ok(ValidationDecision::Skip);
-    }
-
-    Err(ValidationError::SigningRequiredButMissing)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
