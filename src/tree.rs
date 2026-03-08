@@ -107,10 +107,7 @@ impl From<MsgWriteError> for TreeConnectError {
 impl From<MsgReadError> for TreeConnectError {
     fn from(value: MsgReadError) -> Self {
         match value {
-            MsgReadError::NetBIOS
-            | MsgReadError::NotSigned
-            | MsgReadError::InvalidSignature
-            | MsgReadError::InvalidlySignedMessage => Self::InvalidMessage,
+            MsgReadError::NetBIOS | MsgReadError::InvalidlySignedMessage => Self::InvalidMessage,
             MsgReadError::Connection(error) => Self::Io(error),
         }
     }

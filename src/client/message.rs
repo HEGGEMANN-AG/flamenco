@@ -1,6 +1,9 @@
 use std::{
+    future::Future,
     io::{Error as IoError, ErrorKind},
+    pin::Pin,
     sync::Arc,
+    task::{Context, Poll},
 };
 
 use hmac::{Hmac, Mac};
@@ -17,18 +20,17 @@ use crate::{
     message::{MessageBody, ReadError, WriteError},
 };
 
+pub struct UnparsedMessage {
+    pub header: Arc<SyncHeader202Incoming>,
+    pub content: Arc<[u8]>,
+    pub signature_verifier: Validator,
+}
+
 /// Signature validation and netBIOS stuff should be happening here
 pub async fn read_202_message<R: AsyncRead + Unpin>(
     r: &mut R,
     incoming_key: Receiver<Option<[u8; 16]>>,
-) -> Result<
-    (
-        Arc<SyncHeader202Incoming>,
-        Arc<[u8]>,
-        impl Future<Output = Result<(), ReadError>>,
-    ),
-    ReadError,
-> {
+) -> Result<UnparsedMessage, ReadError> {
     let mut bios_size = [0u8; 4];
     r.read_exact(&mut bios_size)
         .await
@@ -53,20 +55,46 @@ pub async fn read_202_message<R: AsyncRead + Unpin>(
     r.read_exact(&mut message_body)
         .await
         .map_err(ReadError::Connection)?;
-    let message_body: Arc<[u8]> = Arc::from(message_body);
-    let arced = Arc::new(header);
-    let retained_body = message_body.clone();
-    let arced2 = arced.clone();
-    Ok((arced, message_body, async move {
-        if let Some(key) = incoming_key
-            .await
-            .expect("dropped promised validation handle!")
-        {
-            validate_to_error(&arced2, &key, &mut header_bytes, &retained_body)
-        } else {
-            Ok(())
+    let content: Arc<[u8]> = Arc::from(message_body);
+    let header = Arc::new(header);
+    let body = content.clone();
+    let signature_verifier = Validator {
+        header_bytes,
+        body,
+        header: header.clone(),
+        incoming_key,
+    };
+    Ok(UnparsedMessage {
+        header,
+        content,
+        signature_verifier,
+    })
+}
+
+pub struct Validator {
+    header_bytes: [u8; 64],
+    body: Arc<[u8]>,
+    header: Arc<SyncHeader202Incoming>,
+    incoming_key: Receiver<Option<[u8; 16]>>,
+}
+impl Future for Validator {
+    type Output = Result<(), ValidationError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = &mut *self;
+        let incoming_key = &mut this.incoming_key;
+        let header_bytes = &mut this.header_bytes;
+        let header = &this.header;
+        let body = &this.body;
+        match Pin::new(incoming_key).poll(cx) {
+            Poll::Ready(Ok(key)) => Poll::Ready(match key {
+                None => Ok(()),
+                Some(key) => validate_to_error(header, &key, header_bytes, body),
+            }),
+            Poll::Ready(Err(_)) => Poll::Ready(Err(ValidationError::ChannelClosed)),
+            Poll::Pending => Poll::Pending,
         }
-    }))
+    }
 }
 
 fn validate_to_error(
@@ -74,19 +102,24 @@ fn validate_to_error(
     key: &[u8; 16],
     header_bytes: &mut [u8],
     body_bytes: &[u8],
-) -> Result<(), ReadError> {
+) -> Result<(), ValidationError> {
     let is_signed = header.flags & FLAG_SIGNED != 0;
     if header.message_id != u64::MAX && header.status != STATUS_PENDING {
         if !is_signed {
-            Err(ReadError::NotSigned)
+            Err(ValidationError::NotSigned)
         } else if validate_signature(key, &header.signature, header_bytes, body_bytes) {
             Ok(())
         } else {
-            Err(ReadError::InvalidSignature)
+            Err(ValidationError::InvalidSignature)
         }
     } else {
         Ok(())
     }
+}
+pub enum ValidationError {
+    NotSigned,
+    InvalidSignature,
+    ChannelClosed,
 }
 
 fn validate_signature(

@@ -5,8 +5,6 @@ use tokio::io::AsyncWrite;
 #[derive(Debug)]
 pub enum ReadError {
     NetBIOS,
-    NotSigned,
-    InvalidSignature,
     InvalidlySignedMessage,
     Connection(std::io::Error),
 }

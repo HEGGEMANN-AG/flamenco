@@ -187,10 +187,7 @@ impl From<MsgWriteError> for SessionSetupError {
 impl From<MsgReadError> for SessionSetupError {
     fn from(value: MsgReadError) -> Self {
         match value {
-            MsgReadError::InvalidSignature
-            | MsgReadError::InvalidlySignedMessage
-            | MsgReadError::NotSigned
-            | MsgReadError::NetBIOS => Self::InvalidMessage,
+            MsgReadError::InvalidlySignedMessage | MsgReadError::NetBIOS => Self::InvalidMessage,
             MsgReadError::Connection(io) => Self::Io(io),
         }
     }

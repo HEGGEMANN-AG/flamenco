@@ -22,6 +22,7 @@ use tokio::{
 use kenobi::cred::{Credentials, Outbound};
 
 use crate::{
+    client::message::UnparsedMessage,
     error::{ErrorResponse2, ServerError},
     header::{Command202, SyncHeader202Incoming, SyncHeader202Outgoing},
     message::{MessageBody, ReadError, WriteError},
@@ -236,7 +237,11 @@ impl Connection {
                     return;
                 }
             };
-            let (header, body, validation) = match read_result {
+            let UnparsedMessage {
+                header,
+                content,
+                signature_verifier,
+            } = match read_result {
                 Ok(v) => v,
                 Err(ReadError::Connection(io)) if io.kind() == ErrorKind::ConnectionReset => {
                     break;
@@ -255,7 +260,7 @@ impl Connection {
                     key_sender
                         .send(Some(*session.session_key()))
                         .expect("validation side task removed");
-                    let Ok(()) = validation.await else {
+                    let Ok(()) = signature_verifier.await else {
                         eprintln!("Bad signature on message");
                         return;
                     };
@@ -269,7 +274,7 @@ impl Connection {
                     eprintln!("Message request not found");
                     continue;
                 };
-                if message_sender.send((header, body)).is_err() {
+                if message_sender.send((header, content)).is_err() {
                     eprintln!("Message receiver for {message_id} closed early");
                 };
             } else if matches!(
@@ -281,7 +286,7 @@ impl Connection {
                     .await
                     .remove(&header.message_id)
                     .unwrap();
-                let _ = message_sender.send((header, body));
+                let _ = message_sender.send((header, content));
             } else {
                 eprintln!("Logged in command with no session");
             }
@@ -330,10 +335,7 @@ impl From<ReadError> for ConnectError {
     fn from(value: ReadError) -> Self {
         match value {
             ReadError::Connection(io) => Self::Io(io),
-            ReadError::InvalidSignature
-            | ReadError::NotSigned
-            | ReadError::InvalidlySignedMessage
-            | ReadError::NetBIOS => Self::InvalidMessage,
+            ReadError::InvalidlySignedMessage | ReadError::NetBIOS => Self::InvalidMessage,
         }
     }
 }
