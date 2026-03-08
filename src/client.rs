@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    fmt::Display,
     io::{Cursor, ErrorKind},
     num::NonZero,
     ops::DerefMut,
@@ -350,6 +351,32 @@ pub enum ConnectError {
         code: NonZero<u32>,
         body: ErrorResponse2,
     },
+}
+impl std::error::Error for ConnectError {
+    fn cause(&self) -> Option<&dyn std::error::Error> {
+        match self {
+            Self::InvalidMessage
+            | Self::MaxMessageSizeInsufficient
+            | Self::ServerChoseUnsupportedDialect
+            | Self::ServerError { .. } => None,
+            Self::Io(io) => Some(io),
+        }
+    }
+}
+impl Display for ConnectError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidMessage => write!(f, "Server returned invalid message"),
+            Self::MaxMessageSizeInsufficient => {
+                write!(f, "Maximum message size exceeds protocol minimum")
+            }
+            Self::ServerChoseUnsupportedDialect => write!(f, "Server chose unsupported dialect"),
+            Self::ServerError { code, .. } => {
+                write!(f, "Server returned error response. Code {code:x}")
+            }
+            Self::Io(io) => write!(f, "IO error: {io}"),
+        }
+    }
 }
 impl ServerError for ConnectError {
     fn invalid_message() -> Self {
