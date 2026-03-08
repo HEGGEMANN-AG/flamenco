@@ -13,23 +13,24 @@ use tokio::{
     sync::oneshot::Receiver,
 };
 
-const STATUS_PENDING: u32 = 0x00000103;
-
 use crate::{
     header::{FLAG_SIGNED, SyncHeader202Incoming, SyncHeader202Outgoing},
     message::{MessageBody, ReadError, WriteError},
+    sign::{
+        ValidationContext, ValidationDecision, ValidationError, should_enforce_signature_validation,
+    },
 };
 
+#[derive(Debug)]
 pub struct UnparsedMessage {
-    pub header: SyncHeader202Incoming,
+    pub header: Arc<SyncHeader202Incoming>,
     pub content: Arc<[u8]>,
     pub signature_validator: Validator,
 }
 
-/// Signature validation and netBIOS stuff should be happening here
 pub async fn read_202_message<R: AsyncRead + Unpin>(
     r: &mut R,
-    incoming_key: Receiver<Option<[u8; 16]>>,
+    validation_ctx_receiver: Receiver<ValidationContext>,
 ) -> Result<UnparsedMessage, ReadError> {
     let mut bios_size = [0u8; 4];
     r.read_exact(&mut bios_size)
@@ -57,7 +58,9 @@ pub async fn read_202_message<R: AsyncRead + Unpin>(
         .map_err(ReadError::Connection)?;
     let content: Arc<[u8]> = Arc::from(message_body);
     let body = content.clone();
-    let signature_validator = Validator::new(&header, incoming_key, header_bytes, body);
+    let header = Arc::new(header);
+    let signature_validator =
+        Validator::new(header.clone(), validation_ctx_receiver, header_bytes, body);
     Ok(UnparsedMessage {
         header,
         content,
@@ -65,31 +68,29 @@ pub async fn read_202_message<R: AsyncRead + Unpin>(
     })
 }
 
+#[derive(Debug)]
 pub struct Validator {
     header_bytes: [u8; 64],
+    parsed_header: Arc<SyncHeader202Incoming>,
     body: Arc<[u8]>,
-    is_max_message_id: bool,
     signature: [u8; 16],
-    is_signed_flag: bool,
-    status_pending: bool,
 
-    incoming_key: Receiver<Option<[u8; 16]>>,
+    validation_ctx: Receiver<ValidationContext>,
 }
 impl Validator {
     fn new(
-        header: &SyncHeader202Incoming,
-        incoming_key: Receiver<Option<[u8; 16]>>,
+        header: Arc<SyncHeader202Incoming>,
+        validation_ctx: Receiver<ValidationContext>,
         header_bytes: [u8; 64],
         body: Arc<[u8]>,
     ) -> Self {
+        let signature = header.signature;
         Self {
+            parsed_header: header,
             header_bytes,
             body,
-            is_max_message_id: header.message_id == u64::MAX,
-            signature: header.signature,
-            is_signed_flag: header.flags & FLAG_SIGNED != 0,
-            status_pending: header.status == STATUS_PENDING,
-            incoming_key,
+            signature,
+            validation_ctx,
         }
     }
 }
@@ -98,71 +99,47 @@ impl Future for Validator {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let sig = self.signature;
-        let is_max_message_id = self.is_max_message_id;
-        let is_signed_flag = self.is_signed_flag;
-        let status_pending = self.status_pending;
         let this = &mut *self;
-        let incoming_key = &mut this.incoming_key;
         let header_bytes = &mut this.header_bytes;
+        let header = this.parsed_header.as_ref();
         let body = &this.body;
-        match Pin::new(incoming_key).poll(cx) {
-            Poll::Ready(Ok(key)) => Poll::Ready(match key {
-                None => Ok(()),
-                Some(key) => Self::validate_to_error(
-                    key,
-                    sig,
-                    is_max_message_id,
-                    is_signed_flag,
-                    status_pending,
-                    header_bytes,
-                    body,
-                ),
-            }),
+
+        match Pin::new(&mut this.validation_ctx).poll(cx) {
+            Poll::Ready(Ok(ctx)) => {
+                let Some(key) = ctx.key else {
+                    return Poll::Ready(Ok(()));
+                };
+
+                match should_enforce_signature_validation(header, ctx.requires_signing) {
+                    Ok(ValidationDecision::Skip) => Poll::Ready(Ok(())),
+                    Ok(ValidationDecision::MustVerify) => {
+                        Poll::Ready(Self::validate_signature(key, sig, header_bytes, body))
+                    }
+                    Err(e) => Poll::Ready(Err(e)),
+                }
+            }
             Poll::Ready(Err(_)) => Poll::Ready(Err(ValidationError::ChannelClosed)),
             Poll::Pending => Poll::Pending,
         }
     }
 }
 impl Validator {
-    fn validate_to_error(
-        key: [u8; 16],
-        signature: [u8; 16],
-        is_max_message_id: bool,
-        is_signed_flag: bool,
-        status_pending: bool,
-        header_bytes: &mut [u8],
-        body_bytes: &[u8],
-    ) -> Result<(), ValidationError> {
-        if is_max_message_id && !status_pending {
-            if !is_signed_flag {
-                Err(ValidationError::NotFlaggedAsSigned)
-            } else if Self::validate_signature(key, signature, header_bytes, body_bytes) {
-                Ok(())
-            } else {
-                Err(ValidationError::InvalidSignature)
-            }
-        } else {
-            Ok(())
-        }
-    }
     fn validate_signature(
         key: [u8; 16],
         sig: [u8; 16],
         header_bytes: &mut [u8],
         body_bytes: &[u8],
-    ) -> bool {
+    ) -> Result<(), ValidationError> {
         header_bytes[48..64].fill(0);
         let mut hasher = Hmac::<Sha256>::new_from_slice(&key).unwrap();
         hasher.update(header_bytes);
         hasher.update(body_bytes);
-        hasher.finalize().into_bytes()[0..16] == sig
+        if hasher.finalize().into_bytes()[0..16] == sig {
+            Ok(())
+        } else {
+            Err(ValidationError::InvalidSignature)
+        }
     }
-}
-
-pub enum ValidationError {
-    NotFlaggedAsSigned,
-    InvalidSignature,
-    ChannelClosed,
 }
 
 /// Sets the SIGNED flag depending on the signing key being provided
