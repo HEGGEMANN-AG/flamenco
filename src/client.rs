@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    io::Cursor,
+    io::{Cursor, ErrorKind},
     num::NonZero,
     ops::DerefMut,
     sync::{
@@ -13,8 +13,10 @@ use tokio::{
         TcpStream, ToSocketAddrs,
         tcp::{OwnedReadHalf, OwnedWriteHalf},
     },
-    sync::{Mutex, RwLock, oneshot::Sender},
-    task::JoinHandle,
+    sync::{
+        Mutex, RwLock,
+        oneshot::{Receiver, Sender},
+    },
 };
 
 use kenobi::cred::{Credentials, Outbound};
@@ -75,7 +77,7 @@ pub struct Connection {
     max_read_size: u32,
     max_write_size: u32,
     server_requires_signing: bool,
-    drive_handle: JoinHandle<()>,
+    shutdown_handle: Option<Sender<()>>,
 }
 impl Connection {
     pub(crate) async fn signup_message(
@@ -137,7 +139,7 @@ impl Connection {
         let (rtcp, mut wtcp) = TcpStream::connect(addr).await?.into_split();
         let neg_header = SyncHeader202Outgoing {
             command: Command202::Negotiate,
-            credits: 1,
+            credits: 0,
             flags: 0,
             next_command: None,
             message_id: 0,
@@ -151,10 +153,12 @@ impl Connection {
         let message_id = 0.into();
         let outstanding_requests: Arc<Mutex<OutstandingRequests>> = Arc::default();
         let open_sessions: Arc<RwLock<OpenSessions>> = Arc::default();
-        let drive_handle = tokio::spawn(Self::drive(
+        let (shutdown_handle, shutdown_recv) = tokio::sync::oneshot::channel();
+        tokio::spawn(Self::drive(
             open_sessions.clone(),
             outstanding_requests.clone(),
             rtcp,
+            shutdown_recv,
         ));
         let (header, body) = Self::signup_message_raw(
             outstanding_requests.clone(),
@@ -196,7 +200,7 @@ impl Connection {
             max_read_size: neg_resp.max_read_size,
             max_write_size: neg_resp.max_write_size,
             server_requires_signing,
-            drive_handle,
+            shutdown_handle: Some(shutdown_handle),
         });
         Ok(connection)
     }
@@ -213,25 +217,37 @@ impl Connection {
         let next_message_id = id.fetch_add(1, Ordering::Relaxed);
         header.message_id = next_message_id;
         let (sx, rx) = tokio::sync::oneshot::channel();
+        println!("Inserting pending request");
         pending_requests.lock().await.insert(next_message_id, sx);
         message::write_202_message(write_tcp, key, header, msg, add_null).await?;
+        println!("Awaiting response");
         Ok(rx.await.expect("dropped sender?"))
     }
     async fn drive(
         open_sessions: Arc<RwLock<OpenSessions>>,
         outstanding_requests: Arc<Mutex<OutstandingRequests>>,
         mut tcp: OwnedReadHalf,
+        mut disconnector: Receiver<()>,
     ) {
         loop {
             let (key_sender, key_receiver) = tokio::sync::oneshot::channel();
-            let (header, body, validation) =
-                match message::read_202_message(&mut tcp, key_receiver).await {
-                    Ok(v) => v,
-                    Err(err) => {
-                        eprintln!("Error reading message: {err:?}");
-                        continue;
-                    }
-                };
+            let read_message = message::read_202_message(&mut tcp, key_receiver);
+            let read_result = tokio::select! {
+                x = read_message => x,
+                _ = &mut disconnector => {
+                    return;
+                }
+            };
+            let (header, body, validation) = match read_result {
+                Ok(v) => v,
+                Err(ReadError::Connection(io)) if io.kind() == ErrorKind::ConnectionReset => {
+                    break;
+                }
+                Err(err) => {
+                    eprintln!("Error reading message: {err:?}");
+                    continue;
+                }
+            };
             let session = {
                 let lock = open_sessions.read().await;
                 NonZero::new(header.session_id).and_then(|id| lock.get(&id).cloned())
@@ -260,7 +276,7 @@ impl Connection {
                 };
             } else if matches!(
                 header.command,
-                Command202::Negotiate | Command202::SessionSetup
+                Command202::Negotiate | Command202::SessionSetup | Command202::Logoff
             ) {
                 let message_sender = outstanding_requests
                     .lock()
@@ -276,7 +292,7 @@ impl Connection {
 }
 impl Drop for Connection {
     fn drop(&mut self) {
-        self.drive_handle.abort();
+        let _ = self.shutdown_handle.take().unwrap().send(());
     }
 }
 

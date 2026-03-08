@@ -64,7 +64,7 @@ impl Session202 {
             let client = &connection.client;
             let header = SyncHeader202Outgoing {
                 command: Command202::SessionSetup,
-                credits: 1,
+                credits: 0,
                 flags: 0,
                 next_command: None,
                 message_id: 0,
@@ -148,7 +148,7 @@ impl Session202 {
     pub async fn logoff(self) {
         let logoff_header = SyncHeader202Outgoing {
             command: Command202::Logoff,
-            credits: 1,
+            credits: 0,
             flags: 0,
             next_command: None,
             message_id: 0,
@@ -156,11 +156,11 @@ impl Session202 {
             session_id: Some(self.id),
         };
         let key = self.requires_signing().then_some(self.session_key);
+        self.connection.remove_session(self.id).await;
         let _ = self
             .connection
             .signup_message(logoff_header, &LogoffRequest, false, key)
             .await;
-        self.connection.remove_session(self.id).await;
     }
 }
 

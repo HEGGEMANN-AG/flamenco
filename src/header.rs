@@ -21,7 +21,7 @@ impl SyncHeader202Outgoing {
     pub fn from_session(session: &Session202, command: Command202) -> Self {
         Self {
             command,
-            credits: 1,
+            credits: 0,
             flags: if session.requires_signing() {
                 FLAG_SIGNED
             } else {
