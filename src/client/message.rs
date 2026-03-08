@@ -68,10 +68,10 @@ pub async fn read_202_message<R: AsyncRead + Unpin>(
 pub struct Validator {
     header_bytes: [u8; 64],
     body: Arc<[u8]>,
-    message_id: u64,
+    is_max_message_id: bool,
     signature: [u8; 16],
-    flags: u32,
-    status: u32,
+    is_signed_flag: bool,
+    status_pending: bool,
 
     incoming_key: Receiver<Option<[u8; 16]>>,
 }
@@ -85,10 +85,10 @@ impl Validator {
         Self {
             header_bytes,
             body,
-            message_id: header.message_id,
+            is_max_message_id: header.message_id == u64::MAX,
             signature: header.signature,
-            flags: header.flags,
-            status: header.status,
+            is_signed_flag: header.flags & FLAG_SIGNED != 0,
+            status_pending: header.status == STATUS_PENDING,
             incoming_key,
         }
     }
@@ -98,9 +98,9 @@ impl Future for Validator {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let sig = self.signature;
-        let mid = self.message_id;
-        let flags = self.flags;
-        let status = self.status;
+        let is_max_message_id = self.is_max_message_id;
+        let is_signed_flag = self.is_signed_flag;
+        let status_pending = self.status_pending;
         let this = &mut *self;
         let incoming_key = &mut this.incoming_key;
         let header_bytes = &mut this.header_bytes;
@@ -108,9 +108,15 @@ impl Future for Validator {
         match Pin::new(incoming_key).poll(cx) {
             Poll::Ready(Ok(key)) => Poll::Ready(match key {
                 None => Ok(()),
-                Some(key) => {
-                    Self::validate_to_error(key, sig, mid, flags, status, header_bytes, body)
-                }
+                Some(key) => Self::validate_to_error(
+                    key,
+                    sig,
+                    is_max_message_id,
+                    is_signed_flag,
+                    status_pending,
+                    header_bytes,
+                    body,
+                ),
             }),
             Poll::Ready(Err(_)) => Poll::Ready(Err(ValidationError::ChannelClosed)),
             Poll::Pending => Poll::Pending,
@@ -121,16 +127,15 @@ impl Validator {
     fn validate_to_error(
         key: [u8; 16],
         signature: [u8; 16],
-        message_id: u64,
-        flags: u32,
-        status: u32,
+        is_max_message_id: bool,
+        is_signed_flag: bool,
+        status_pending: bool,
         header_bytes: &mut [u8],
         body_bytes: &[u8],
     ) -> Result<(), ValidationError> {
-        let is_signed = flags & FLAG_SIGNED != 0;
-        if message_id != u64::MAX && status != STATUS_PENDING {
-            if !is_signed {
-                Err(ValidationError::NotSigned)
+        if is_max_message_id && !status_pending {
+            if !is_signed_flag {
+                Err(ValidationError::NotFlaggedAsSigned)
             } else if Self::validate_signature(key, signature, header_bytes, body_bytes) {
                 Ok(())
             } else {
@@ -155,7 +160,7 @@ impl Validator {
 }
 
 pub enum ValidationError {
-    NotSigned,
+    NotFlaggedAsSigned,
     InvalidSignature,
     ChannelClosed,
 }
