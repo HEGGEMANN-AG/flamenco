@@ -217,10 +217,8 @@ impl Connection {
         let next_message_id = id.fetch_add(1, Ordering::Relaxed);
         header.message_id = next_message_id;
         let (sx, rx) = tokio::sync::oneshot::channel();
-        println!("Inserting pending request");
         pending_requests.lock().await.insert(next_message_id, sx);
         message::write_202_message(write_tcp, key, header, msg, add_null).await?;
-        println!("Awaiting response");
         Ok(rx.await.expect("dropped sender?"))
     }
     async fn drive(
