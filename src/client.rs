@@ -381,7 +381,9 @@ impl From<ReadError> for ConnectError {
     fn from(value: ReadError) -> Self {
         match value {
             ReadError::Connection(io) => Self::Io(io),
-            ReadError::InvalidlySignedMessage | ReadError::NetBIOS => Self::InvalidMessage,
+            ReadError::InvalidlySignedMessage | ReadError::InvalidNetbiosLength => {
+                Self::InvalidMessage
+            }
         }
     }
 }

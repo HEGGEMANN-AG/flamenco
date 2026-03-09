@@ -6,6 +6,7 @@ pub mod file;
 mod header;
 mod message;
 mod negotiate;
+mod netbios;
 pub mod session;
 mod share_name;
 mod sign;

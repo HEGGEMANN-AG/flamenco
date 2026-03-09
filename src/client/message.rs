@@ -9,13 +9,14 @@ use std::{
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    io::{AsyncRead, AsyncWrite},
     sync::oneshot::Receiver,
 };
 
 use crate::{
     header::{FLAG_SIGNED, SyncHeader202Incoming, SyncHeader202Outgoing},
     message::{MessageBody, ReadError, WriteError},
+    netbios::{OwnedNetBios, use_as_netbios_content},
     sign::{ValidationContext, ValidationError},
 };
 
@@ -30,35 +31,22 @@ pub async fn read_202_message<R: AsyncRead + Unpin>(
     r: &mut R,
     validation_ctx_receiver: Receiver<ValidationContext>,
 ) -> Result<IncomingMessage, ReadError> {
-    let mut bios_size = [0u8; 4];
-    r.read_exact(&mut bios_size)
-        .await
-        .map_err(ReadError::Connection)?;
-    let message_size = match u32::from_be_bytes(bios_size) {
-        0..64 => {
-            return Err(ReadError::Connection(IoError::new(
-                ErrorKind::UnexpectedEof,
-                "Not enough data for header",
-            )));
-        }
-        0x0100_0000.. => return Err(ReadError::NetBIOS),
-        size => size,
+    let netbios = OwnedNetBios::read_from_async(r).await?;
+    let Some((header_bytes, message_body)) = netbios.content().split_first_chunk() else {
+        return Err(ReadError::Connection(IoError::new(
+            ErrorKind::UnexpectedEof,
+            "Not enough data for header",
+        )));
     };
-    let mut header_bytes = [0u8; 64];
-    r.read_exact(&mut header_bytes)
-        .await
-        .map_err(ReadError::Connection)?;
-    let header = SyncHeader202Incoming::from_bytes(&header_bytes).unwrap();
-    let message_body_size = (message_size - 64) as usize;
-    let mut message_body = vec![0u8; message_body_size];
-    r.read_exact(&mut message_body)
-        .await
-        .map_err(ReadError::Connection)?;
+    let header = SyncHeader202Incoming::from_bytes(header_bytes).unwrap();
     let content: Arc<[u8]> = Arc::from(message_body);
-    let body = content.clone();
     let header = Arc::new(header);
-    let signature_validator =
-        Validator::new(header.clone(), validation_ctx_receiver, header_bytes, body);
+    let signature_validator = Validator::new(
+        header.clone(),
+        validation_ctx_receiver,
+        *header_bytes,
+        content.clone(),
+    );
     Ok(IncomingMessage {
         header,
         content,
@@ -140,22 +128,6 @@ impl Validator {
     }
 }
 
-async fn write_netbios_message<W: AsyncWrite + Unpin>(
-    w: &mut W,
-    buffer: Vec<u8>,
-) -> Result<(), WriteError> {
-    match buffer.len() {
-        0x0100_0000.. => Err(WriteError::MessageTooLong),
-        len => {
-            w.write_all(&(len as u32).to_be_bytes())
-                .await
-                .map_err(WriteError::Connection)?;
-            w.write_all(&buffer).await.map_err(WriteError::Connection)?;
-            Ok(())
-        }
-    }
-}
-
 fn buffer_and_sign_message<M: MessageBody>(
     sign_with_key: Option<[u8; 16]>,
     mut header: SyncHeader202Outgoing,
@@ -190,11 +162,14 @@ pub async fn write_202_message<W: AsyncWrite + Unpin, M: MessageBody>(
     body: &M,
     add_null: bool,
 ) -> Result<(), WriteError> {
-    write_netbios_message(
-        w,
-        buffer_and_sign_message(sign_with_key, header, body, add_null),
-    )
-    .await
+    let buf = buffer_and_sign_message(sign_with_key, header, body, add_null);
+    let Some(netbios) = use_as_netbios_content(&buf) else {
+        return Err(WriteError::MessageTooLong);
+    };
+    netbios
+        .write_into_async(w)
+        .await
+        .map_err(WriteError::Connection)
 }
 
 #[derive(Debug)]
