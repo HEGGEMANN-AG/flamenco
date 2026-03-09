@@ -61,6 +61,7 @@ impl CloseResponse {
 #[derive(Debug)]
 pub enum ReadCloseError {
     Io(std::io::Error),
+    InvalidHeader,
     InvalidStructureSize,
 }
 impl From<std::io::Error> for ReadCloseError {

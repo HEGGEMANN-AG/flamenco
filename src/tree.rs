@@ -9,7 +9,7 @@ use crate::{
     ReadIntLe,
     error::{ErrorResponse2, ServerError},
     file::{FileHandle, OpenError},
-    header::{Command202, SyncHeader202Outgoing},
+    header::{Command202, SyncHeader202Incoming, SyncHeader202Outgoing},
     message::{MessageBody, ReadError as MsgReadError, WriteError as MsgWriteError},
     session::Session202,
     share_name::{InvalidShareName, ShareName},
@@ -21,7 +21,7 @@ pub struct TreeConnection {
     share_type: ShareType,
     /// There are no valid flags in 202 besides the SMB2_SHARE_CAP_DFS
     dfs_capability: bool,
-    id: u32,
+    id: NonZero<u32>,
 }
 impl TreeConnection {
     pub async fn new(
@@ -43,13 +43,17 @@ impl TreeConnection {
         if let Some(code) = NonZero::new(header.status) {
             return Err(ServerError::handle_error_body(code, &msg));
         }
+        verify_tree_connect_header(&header)?;
         let response = TreeConnectResponse::read_from(&mut Cursor::new(msg))?;
+        let Some(id) = header.tree_id else {
+            return Err(TreeConnectError::InvalidMessage);
+        };
         let tree = TreeConnection {
             session,
             share_type: response.share_type,
             // Ignore all other capabilities for now (since it's 202)
             dfs_capability: response.capabilities & 0x08 != 0,
-            id: header.tree_id,
+            id,
         };
         Ok(Arc::new(tree))
     }
@@ -57,23 +61,43 @@ impl TreeConnection {
         let session = self.session.clone();
         let key = session.requires_signing().then_some(*session.session_key());
         let header = SyncHeader202Outgoing::from_tree_con(&self, Command202::TreeDisconnect);
-        let Ok((_header, body)) = session
+        let Ok((header, body)) = session
             .connection
             .signup_message(header, &TreeDisconnectRequest, false, key)
             .await
         else {
             return;
         };
-        let _ = TreeDisconnectResponse::read_from(&mut body.as_ref());
+        let Ok(_) = TreeDisconnectResponse::read_from(&mut body.as_ref()) else {
+            return;
+        };
+        let _ = verify_tree_disconnect_header(&header);
     }
     pub(crate) fn session(&self) -> &Session202 {
         self.session.borrow()
     }
-    pub fn id(&self) -> u32 {
+    pub fn id(&self) -> NonZero<u32> {
         self.id
     }
     pub async fn open_file(self: Arc<Self>, path: &str) -> Result<FileHandle, OpenError> {
         FileHandle::new(self, path).await
+    }
+}
+
+fn verify_tree_connect_header(header: &SyncHeader202Incoming) -> Result<(), TreeConnectError> {
+    if header.command != Command202::TreeConnect || header.is_async() {
+        return Err(TreeConnectError::InvalidMessage);
+    }
+    Ok(())
+}
+
+fn verify_tree_disconnect_header(
+    header: &SyncHeader202Incoming,
+) -> Result<(), TreeDisconnectError> {
+    if header.command != Command202::TreeDisconnect || header.is_async() {
+        Err(TreeDisconnectError::InvalidMessage)
+    } else {
+        Ok(())
     }
 }
 
@@ -123,6 +147,11 @@ impl From<ReadError> for TreeConnectError {
             ReadError::InvalidSize | ReadError::InvalidShareType => Self::InvalidMessage,
         }
     }
+}
+
+#[derive(Debug)]
+enum TreeDisconnectError {
+    InvalidMessage,
 }
 
 fn parse_share_path(s: &str) -> Result<(&str, ShareName), InvalidSharePath> {

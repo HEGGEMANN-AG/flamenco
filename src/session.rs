@@ -14,7 +14,7 @@ use crate::{
     ReadIntLe,
     client::{Connection, GuestPolicy},
     error::{ErrorResponse2, ServerError},
-    header::{Command202, SyncHeader202Outgoing},
+    header::{Command202, SyncHeader202Incoming, SyncHeader202Outgoing},
     message::{MessageBody, ReadError as MsgReadError, WriteError as MsgWriteError},
     sign::SecurityMode,
     tree::{TreeConnectError, TreeConnection},
@@ -68,7 +68,7 @@ impl Session202 {
                 flags: 0,
                 next_command: None,
                 message_id: 0,
-                tree_id: 0,
+                tree_id: None,
                 session_id,
             };
             let body = SessionSetupRequest {
@@ -90,6 +90,7 @@ impl Session202 {
             {
                 return Err(SessionSetupError::handle_error_body(code, &body));
             }
+            verify_session_setup_header(&header)?;
             let SessionSetupResponse { flags, sec_buffer } =
                 SessionSetupResponse::read_from(Cursor::new(body))?;
 
@@ -118,7 +119,7 @@ impl Session202 {
                         SessionFlags::Guest => client.requires_signing,
                         SessionFlags::Anonymous => false,
                     };
-                    let Some(id) = NonZero::new(header.session_id) else {
+                    let Some(id) = header.session_id else {
                         return Err(SessionSetupError::InvalidMessage);
                     };
                     let session = Session202 {
@@ -136,7 +137,7 @@ impl Session202 {
                     return Ok(as_arc);
                 }
             };
-            session_id = NonZero::new(header.session_id);
+            session_id = header.session_id;
         }
     }
     pub async fn tree_connect(
@@ -152,18 +153,42 @@ impl Session202 {
             flags: 0,
             next_command: None,
             message_id: 0,
-            tree_id: 0,
+            tree_id: None,
             session_id: Some(self.id),
         };
         let key = self.requires_signing().then_some(self.session_key);
         self.connection.remove_session(self.id).await;
-        let _ = self
+        let Ok((h, _)) = self
             .connection
             .signup_message(logoff_header, &LogoffRequest, false, key)
-            .await;
+            .await
+        else {
+            return;
+        };
+        let _ = verify_logoff_header(&h);
     }
 }
 
+fn verify_session_setup_header(header: &SyncHeader202Incoming) -> Result<(), SessionSetupError> {
+    if header.command != Command202::SessionSetup || header.is_async() || header.tree_id.is_some() {
+        Err(SessionSetupError::InvalidMessage)
+    } else {
+        Ok(())
+    }
+}
+
+fn verify_logoff_header(header: &SyncHeader202Incoming) -> Result<(), LogoffError> {
+    if header.command != Command202::Logoff || header.is_async() {
+        Err(LogoffError::InvalidMessage)
+    } else {
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+enum LogoffError {
+    InvalidMessage,
+}
 #[derive(Debug)]
 pub enum SessionSetupError {
     Io(std::io::Error),

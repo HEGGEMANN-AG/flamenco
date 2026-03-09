@@ -153,7 +153,7 @@ impl Connection {
             flags: 0,
             next_command: None,
             message_id: 0,
-            tree_id: 0,
+            tree_id: None,
             session_id: None,
         };
         let neg_req = NegotiateRequest202 {
@@ -180,12 +180,13 @@ impl Connection {
             None,
         )
         .await?;
+        if header.command != Command202::Negotiate {
+            return Err(ConnectError::InvalidMessage);
+        }
         if let Some(code) = NonZero::new(header.status) {
             return Err(ConnectError::handle_error_body(code, &body));
         }
-        if header.command != Command202::Negotiate || header.message_id != 0 {
-            return Err(ConnectError::InvalidMessage);
-        }
+        verify_negotiate_header(&header)?;
         let neg_resp = NegotiateResponse::read_from(&mut Cursor::new(body))?;
         if neg_resp.max_transact_size < MINIMUM_TRANSACT_SIZE
             || neg_resp.max_read_size < MINIMUM_TRANSACT_SIZE
@@ -262,7 +263,7 @@ impl Connection {
             };
             let session_opt = {
                 let lock = open_sessions.read().await;
-                NonZero::new(header.session_id).and_then(|id| lock.get(&id).cloned())
+                header.session_id.and_then(|id| lock.get(&id).cloned())
             };
 
             let out_of_session = matches!(
@@ -338,6 +339,18 @@ impl Connection {
 impl Drop for Connection {
     fn drop(&mut self) {
         let _ = self.shutdown_handle.take().unwrap().send(());
+    }
+}
+
+fn verify_negotiate_header(header: &SyncHeader202Incoming) -> Result<(), ConnectError> {
+    if header.command != Command202::Negotiate
+        || header.is_async()
+        || header.tree_id.is_some()
+        || header.session_id.is_some()
+    {
+        Err(ConnectError::InvalidMessage)
+    } else {
+        Ok(())
     }
 }
 

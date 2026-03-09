@@ -14,7 +14,7 @@ pub struct SyncHeader202Outgoing {
     pub flags: u32,
     pub next_command: Option<NonZero<u32>>,
     pub message_id: u64,
-    pub tree_id: u32,
+    pub tree_id: Option<NonZero<u32>>,
     pub session_id: Option<NonZero<u64>>,
 }
 impl SyncHeader202Outgoing {
@@ -29,14 +29,14 @@ impl SyncHeader202Outgoing {
             },
             next_command: None,
             message_id: 0,
-            tree_id: 0,
+            tree_id: None,
             session_id: Some(session.id),
         }
     }
     pub fn from_tree_con(tree_con: &TreeConnection, command: Command202) -> Self {
         let header = Self::from_session(tree_con.session(), command);
         Self {
-            tree_id: tree_con.id(),
+            tree_id: Some(tree_con.id()),
             ..header
         }
     }
@@ -51,7 +51,7 @@ impl SyncHeader202Outgoing {
         bytes[16..20].copy_from_slice(&self.flags.to_le_bytes());
         bytes[20..24].copy_from_slice(&self.next_command.map_or(0, NonZero::get).to_le_bytes());
         bytes[24..32].copy_from_slice(&self.message_id.to_le_bytes());
-        bytes[36..40].copy_from_slice(&self.tree_id.to_le_bytes());
+        bytes[36..40].copy_from_slice(&self.tree_id.map_or(0, NonZero::get).to_le_bytes());
         bytes[40..48].copy_from_slice(&self.session_id.map_or(0, NonZero::get).to_le_bytes());
         bytes
     }
@@ -66,8 +66,8 @@ pub struct SyncHeader202Incoming {
     pub flags: u32,
     pub next_command: Option<NonZero<u32>>,
     pub message_id: u64,
-    pub tree_id: u32,
-    pub session_id: u64,
+    pub tree_id: Option<NonZero<u32>>,
+    pub session_id: Option<NonZero<u64>>,
     pub signature: [u8; 16],
 }
 impl SyncHeader202Incoming {
@@ -88,7 +88,9 @@ impl SyncHeader202Incoming {
         let next_command = NonZero::new(next_command);
         let message_id = u64::from_le_bytes(*b[24..32].as_array().unwrap());
         let tree_id = u32::from_le_bytes(*b[36..40].as_array().unwrap());
+        let tree_id = NonZero::new(tree_id);
         let session_id = u64::from_le_bytes(*b[40..48].as_array().unwrap());
+        let session_id = NonZero::new(session_id);
         let signature: [u8; 16] = *b.last_chunk().unwrap();
         Ok(Self {
             status,
@@ -101,6 +103,9 @@ impl SyncHeader202Incoming {
             session_id,
             signature,
         })
+    }
+    pub fn is_async(&self) -> bool {
+        self.flags & 0x02 != 0
     }
 }
 

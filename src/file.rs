@@ -13,10 +13,10 @@ use crate::{
     ReadIntLe,
     error::{ErrorResponse2, ServerError},
     file::{
-        close::{CloseRequest, CloseResponse},
+        close::{CloseRequest, CloseResponse, ReadCloseError},
         read::{ReadFileError, ReadRequest, ReadResponse, ReadResponseError},
     },
-    header::{Command202, SyncHeader202Outgoing},
+    header::{Command202, SyncHeader202Incoming, SyncHeader202Outgoing},
     message::{MessageBody, WriteError},
     tree::TreeConnection,
 };
@@ -90,6 +90,7 @@ impl FileHandle {
         if let Some(code) = NonZero::new(header.status) {
             return Err(ServerError::handle_error_body(code, &body));
         }
+        verify_create_header(&header)?;
         let CreateResponse {
             oplock_level,
             create_action,
@@ -149,6 +150,7 @@ impl FileHandle {
         if let Some(code) = NonZero::new(header.status) {
             return Err(ServerError::handle_error_body(code, &body));
         }
+        verify_read_header(&header)?;
         match ReadResponse::read_from(Cursor::new(body)) {
             Ok(ok) => Ok(ok.into_inner()),
             Err(ReadResponseError::Io(io)) => Err(ReadFileError::Io(io)),
@@ -180,6 +182,7 @@ impl FileHandle {
         if let Some(code) = NonZero::new(header.status) {
             panic!("Error with code {code}");
         }
+        let _ = verify_close_header(&header);
         let _body = CloseResponse::read_from(&mut body.as_ref());
         Ok(())
     }
@@ -240,6 +243,30 @@ impl AsyncSeek for FileHandle {
     }
     fn poll_complete(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<u64>> {
         Poll::Ready(Ok(self.offset))
+    }
+}
+
+fn verify_create_header(header: &SyncHeader202Incoming) -> Result<(), OpenError> {
+    if header.command != Command202::Create || header.is_async() {
+        Err(OpenError::InvalidMessage)
+    } else {
+        Ok(())
+    }
+}
+
+fn verify_read_header(header: &SyncHeader202Incoming) -> Result<(), ReadFileError> {
+    if header.command != Command202::Read || header.is_async() {
+        Err(ReadFileError::InvalidMessage)
+    } else {
+        Ok(())
+    }
+}
+
+fn verify_close_header(header: &SyncHeader202Incoming) -> Result<(), ReadCloseError> {
+    if header.command != Command202::Close || header.is_async() {
+        Err(ReadCloseError::InvalidHeader)
+    } else {
+        Ok(())
     }
 }
 
