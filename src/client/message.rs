@@ -140,34 +140,13 @@ impl Validator {
     }
 }
 
-/// Sets the SIGNED flag depending on the signing key being provided
-pub async fn write_202_message<W: AsyncWrite + Unpin, M: MessageBody>(
+async fn write_netbios_message<W: AsyncWrite + Unpin>(
     w: &mut W,
-    sign_with_key: Option<[u8; 16]>,
-    mut header: SyncHeader202Outgoing,
-    body: &M,
-    add_null: bool,
+    buffer: Vec<u8>,
 ) -> Result<(), WriteError> {
-    let mut buffer = Vec::with_capacity(64 + body.size_hint());
-    if sign_with_key.is_some() {
-        header.flags |= FLAG_SIGNED;
-    }
-    buffer.write_all(&header.to_bytes()).await.unwrap();
-    body.write_to(&mut buffer);
-    if add_null {
-        buffer.push(0);
-    }
     match buffer.len() {
-        0..=64 => unreachable!(),
         0x0100_0000.. => Err(WriteError::MessageTooLong),
         len => {
-            if let Some(session_key) = sign_with_key {
-                let mut hasher = Hmac::<Sha256>::new_from_slice(&session_key).unwrap();
-                hasher.update(&buffer);
-                let hash_result = hasher.finalize();
-                buffer[48..64]
-                    .copy_from_slice(hash_result.into_bytes().first_chunk::<16>().unwrap());
-            }
             w.write_all(&(len as u32).to_be_bytes())
                 .await
                 .map_err(WriteError::Connection)?;
@@ -175,6 +154,47 @@ pub async fn write_202_message<W: AsyncWrite + Unpin, M: MessageBody>(
             Ok(())
         }
     }
+}
+
+fn buffer_and_sign_message<M: MessageBody>(
+    sign_with_key: Option<[u8; 16]>,
+    mut header: SyncHeader202Outgoing,
+    body: &M,
+    add_null: bool,
+) -> Vec<u8> {
+    let mut buffer = Vec::with_capacity(64 + body.size_hint());
+    if sign_with_key.is_some() {
+        header.flags |= FLAG_SIGNED;
+    }
+    buffer.extend_from_slice(&header.to_bytes());
+    body.write_to(&mut buffer);
+    if add_null {
+        buffer.push(0);
+    }
+    assert!(buffer.len() > 64);
+    if let Some(session_key) = sign_with_key {
+        let mut hasher = Hmac::<Sha256>::new_from_slice(&session_key).unwrap();
+        hasher.update(&buffer);
+        let hash_result = hasher.finalize().into_bytes();
+        let hash_half = hash_result.first_chunk::<16>().unwrap();
+        buffer[48..64].copy_from_slice(hash_half);
+    }
+    buffer
+}
+
+/// Sets the SIGNED flag depending on the signing key being provided
+pub async fn write_202_message<W: AsyncWrite + Unpin, M: MessageBody>(
+    w: &mut W,
+    sign_with_key: Option<[u8; 16]>,
+    header: SyncHeader202Outgoing,
+    body: &M,
+    add_null: bool,
+) -> Result<(), WriteError> {
+    write_netbios_message(
+        w,
+        buffer_and_sign_message(sign_with_key, header, body, add_null),
+    )
+    .await
 }
 
 #[derive(Debug)]

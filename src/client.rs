@@ -92,22 +92,21 @@ pub struct Connection {
 impl Connection {
     pub(crate) async fn signup_message(
         &self,
-        header: SyncHeader202Outgoing,
+        mut header: SyncHeader202Outgoing,
         msg: &impl MessageBody,
         add_null: bool,
         key: Option<[u8; 16]>,
     ) -> Result<(Arc<SyncHeader202Incoming>, Arc<[u8]>), crate::message::WriteError> {
         let mut wtcp = self.write_tcp.lock().await;
-        Self::signup_message_raw(
-            self.outstanding_requests.clone(),
-            wtcp.deref_mut(),
-            &self.message_id,
-            header,
-            msg,
-            add_null,
-            key,
-        )
-        .await
+        let next_message_id = self.message_id.fetch_add(1, Ordering::Relaxed);
+        header.message_id = next_message_id;
+        let (sx, rx) = tokio::sync::oneshot::channel();
+        self.outstanding_requests
+            .lock()
+            .await
+            .insert(next_message_id, sx);
+        message::write_202_message(wtcp.deref_mut(), key, header, msg, add_null).await?;
+        Ok(rx.await.expect("dropped sender?"))
     }
     pub(crate) async fn signup_session(
         &self,
@@ -146,7 +145,7 @@ impl Connection {
         client: Arc<Client202>,
         addr: impl ToSocketAddrs,
     ) -> Result<Arc<Connection>, ConnectError> {
-        let (rtcp, mut wtcp) = TcpStream::connect(addr).await?.into_split();
+        let (rtcp, wtcp) = TcpStream::connect(addr).await?.into_split();
         let neg_header = SyncHeader202Outgoing::default();
         let neg_req = NegotiateRequest202 {
             capabilities: 0,
@@ -156,22 +155,23 @@ impl Connection {
         let outstanding_requests: Arc<Mutex<OutstandingRequests>> = Arc::default();
         let open_sessions: Arc<RwLock<OpenSessions>> = Arc::default();
         let (shutdown_handle, shutdown_recv) = tokio::sync::oneshot::channel();
-        tokio::spawn(Self::drive(
-            open_sessions.clone(),
-            outstanding_requests.clone(),
-            rtcp,
-            shutdown_recv,
-        ));
-        let (header, body) = Self::signup_message_raw(
-            outstanding_requests.clone(),
-            &mut wtcp,
-            &message_id,
-            neg_header,
-            &neg_req,
-            false,
-            None,
-        )
-        .await?;
+        let mut connection = Connection {
+            client,
+            outstanding_requests: outstanding_requests.clone(),
+            open_sessions: open_sessions.clone(),
+            message_id,
+            write_tcp: Mutex::new(wtcp),
+            max_transaction_size: 0,
+            max_read_size: 0,
+            max_write_size: 0,
+            requires_signing: false,
+            shutdown_handle: Some(shutdown_handle),
+        };
+        let drive = Self::drive(open_sessions, outstanding_requests, rtcp, shutdown_recv);
+        tokio::spawn(drive);
+        let (header, body) = connection
+            .signup_message(neg_header, &neg_req, false, None)
+            .await?;
         if header.command != Command202::Negotiate {
             return Err(ConnectError::InvalidMessage);
         }
@@ -186,43 +186,16 @@ impl Connection {
         {
             return Err(ConnectError::MaxMessageSizeInsufficient);
         }
-        let requires_signing = neg_resp.security_mode == SecurityMode::SigningRequired;
         match neg_resp.dialect {
             Dialect::SMB2020 => {}
             Dialect::Wildcard => unimplemented!(),
             _ => return Err(ConnectError::ServerChoseUnsupportedDialect),
         }
-        let write_tcp = Mutex::new(wtcp);
-        let connection = Arc::new(Connection {
-            client,
-            message_id,
-            outstanding_requests,
-            open_sessions,
-            write_tcp,
-            max_transaction_size: neg_resp.max_transact_size,
-            max_read_size: neg_resp.max_read_size,
-            max_write_size: neg_resp.max_write_size,
-            requires_signing,
-            shutdown_handle: Some(shutdown_handle),
-        });
-        Ok(connection)
-    }
-    #[allow(clippy::too_many_arguments)]
-    async fn signup_message_raw(
-        pending_requests: Arc<Mutex<OutstandingRequests>>,
-        write_tcp: &mut OwnedWriteHalf,
-        id: &AtomicU64,
-        mut header: SyncHeader202Outgoing,
-        msg: &impl MessageBody,
-        add_null: bool,
-        key: Option<[u8; 16]>,
-    ) -> Result<(Arc<SyncHeader202Incoming>, Arc<[u8]>), crate::message::WriteError> {
-        let next_message_id = id.fetch_add(1, Ordering::Relaxed);
-        header.message_id = next_message_id;
-        let (sx, rx) = tokio::sync::oneshot::channel();
-        pending_requests.lock().await.insert(next_message_id, sx);
-        message::write_202_message(write_tcp, key, header, msg, add_null).await?;
-        Ok(rx.await.expect("dropped sender?"))
+        connection.requires_signing = neg_resp.security_mode == SecurityMode::SigningRequired;
+        connection.max_read_size = neg_resp.max_read_size;
+        connection.max_transaction_size = neg_resp.max_transact_size;
+        connection.max_write_size = neg_resp.max_write_size;
+        Ok(Arc::new(connection))
     }
     async fn drive(
         open_sessions: Arc<RwLock<OpenSessions>>,
