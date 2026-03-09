@@ -10,9 +10,7 @@ pub struct NetBiosContent([u8]);
 impl ToOwned for NetBiosContent {
     type Owned = OwnedNetBios;
     fn to_owned(&self) -> Self::Owned {
-        let buf: Box<[u8]> = self.0.into();
-        let neg_box = unsafe { std::mem::transmute::<Box<[u8]>, Box<NetBiosContent>>(buf) };
-        OwnedNetBios(neg_box)
+        OwnedNetBios(self.0.into())
     }
 }
 impl NetBiosContent {
@@ -44,7 +42,7 @@ fn check_size(s: usize) -> Option<u32> {
     u32::try_from(s).ok().filter(|len| *len < CRITICAL_SIZE)
 }
 
-pub struct OwnedNetBios(Box<NetBiosContent>);
+pub struct OwnedNetBios(Vec<u8>);
 impl OwnedNetBios {
     pub async fn read_from_async<R: AsyncRead + Unpin>(r: &mut R) -> Result<Self, ReadError> {
         let mut bios_size = [0u8; 4];
@@ -54,9 +52,7 @@ impl OwnedNetBios {
         };
         let mut buf = vec![0; size as usize];
         r.read_exact(&mut buf).await.map_err(ReadError::Io)?;
-        Ok(Self(unsafe {
-            std::mem::transmute::<Box<[u8]>, Box<NetBiosContent>>(buf.into_boxed_slice())
-        }))
+        Ok(Self(buf))
     }
 }
 impl Borrow<NetBiosContent> for OwnedNetBios {
@@ -67,7 +63,8 @@ impl Borrow<NetBiosContent> for OwnedNetBios {
 impl Deref for OwnedNetBios {
     type Target = NetBiosContent;
     fn deref(&self) -> &Self::Target {
-        &self.0
+        let arr = self.0.as_slice();
+        unsafe { use_as_netbios_content_unchecked(arr) }
     }
 }
 
