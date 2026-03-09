@@ -160,7 +160,7 @@ impl Connection {
             capabilities: 0,
             security_mode: client.sent_security_mode(),
         };
-        let message_id = 0.into();
+        let message_id = AtomicU64::default();
         let outstanding_requests: Arc<Mutex<OutstandingRequests>> = Arc::default();
         let open_sessions: Arc<RwLock<OpenSessions>> = Arc::default();
         let (shutdown_handle, shutdown_recv) = tokio::sync::oneshot::channel();
