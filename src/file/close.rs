@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::Read;
 
 use crate::{ReadIntLe, file::FileId, message::MessageBody};
 
@@ -7,21 +7,19 @@ pub struct CloseRequest {
     pub id: FileId,
 }
 impl MessageBody for CloseRequest {
-    type Err = std::io::Error;
     fn size_hint(&self) -> usize {
         24
     }
-    fn write_to<W: Write>(&self, w: &mut W) -> Result<(), Self::Err> {
-        w.write_all(&24u16.to_le_bytes())?;
-        w.write_all(&0u16.to_le_bytes())?;
-        w.write_all(&0u32.to_le_bytes())?;
+    fn write_to(&self, w: &mut Vec<u8>) {
+        w.extend_from_slice(&24u16.to_le_bytes());
+        w.extend_from_slice(&0u16.to_le_bytes());
+        w.extend_from_slice(&0u32.to_le_bytes());
         let FileId {
             persistent,
             volatile,
         } = self.id;
-        w.write_all(&persistent)?;
-        w.write_all(&volatile)?;
-        Ok(())
+        w.extend_from_slice(&persistent);
+        w.extend_from_slice(&volatile);
     }
 }
 

@@ -1,6 +1,6 @@
 use std::{
     borrow::Borrow,
-    io::{Cursor, Read, Seek, SeekFrom, Write},
+    io::{Cursor, Read, Seek, SeekFrom},
     num::NonZero,
     sync::Arc,
 };
@@ -181,28 +181,16 @@ impl TreeConnectRequest<'_> {
     const STRUCTURE_SIZE: u16 = 9;
 }
 impl MessageBody for TreeConnectRequest<'_> {
-    type Err = WriteError;
     fn size_hint(&self) -> usize {
         8 + (self.0.len() * 2)
     }
-    fn write_to<W: Write>(&self, w: &mut W) -> Result<(), Self::Err> {
-        w.write_all(&Self::STRUCTURE_SIZE.to_le_bytes())?;
-        w.write_all(&0u16.to_le_bytes())?;
+    fn write_to(&self, w: &mut Vec<u8>) {
+        w.extend_from_slice(&Self::STRUCTURE_SIZE.to_le_bytes());
+        w.extend_from_slice(&0u16.to_le_bytes());
         let utf16 = crate::to_wide(self.0);
-        w.write_all(&(64 + 8u16).to_le_bytes())?;
-        w.write_all(&(utf16.len() as u16).to_le_bytes())?;
-        w.write_all(&utf16)?;
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-pub enum WriteError {
-    Io(std::io::Error),
-}
-impl From<std::io::Error> for WriteError {
-    fn from(value: std::io::Error) -> Self {
-        Self::Io(value)
+        w.extend_from_slice(&(64 + 8u16).to_le_bytes());
+        w.extend_from_slice(&(utf16.len() as u16).to_le_bytes());
+        w.extend_from_slice(&utf16);
     }
 }
 
@@ -262,14 +250,12 @@ pub enum ShareType {
 #[derive(Clone, Copy, Debug)]
 struct TreeDisconnectRequest;
 impl MessageBody for TreeDisconnectRequest {
-    type Err = std::io::Error;
     fn size_hint(&self) -> usize {
         8
     }
-    fn write_to<W: Write>(&self, w: &mut W) -> Result<(), Self::Err> {
-        w.write_all(&4u16.to_le_bytes())?;
-        w.write_all(&0u16.to_le_bytes())?;
-        Ok(())
+    fn write_to(&self, w: &mut Vec<u8>) {
+        w.extend_from_slice(&4u16.to_le_bytes());
+        w.extend_from_slice(&0u16.to_le_bytes());
     }
 }
 

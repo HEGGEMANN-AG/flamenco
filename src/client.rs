@@ -72,7 +72,7 @@ impl Client202 {
     }
 }
 
-type OutstandingRequests = HashMap<u64, Sender<(Arc<SyncHeader202Incoming>, Arc<[u8]>)>>;
+pub(crate) type OutstandingRequests = HashMap<u64, Sender<(Arc<SyncHeader202Incoming>, Arc<[u8]>)>>;
 type OpenSessions = HashMap<NonZero<u64>, Weak<Session202>>;
 
 #[derive(Debug)]
@@ -147,15 +147,7 @@ impl Connection {
         addr: impl ToSocketAddrs,
     ) -> Result<Arc<Connection>, ConnectError> {
         let (rtcp, mut wtcp) = TcpStream::connect(addr).await?.into_split();
-        let neg_header = SyncHeader202Outgoing {
-            command: Command202::Negotiate,
-            credits: 0,
-            flags: 0,
-            next_command: None,
-            message_id: 0,
-            tree_id: None,
-            session_id: None,
-        };
+        let neg_header = SyncHeader202Outgoing::default();
         let neg_req = NegotiateRequest202 {
             capabilities: 0,
             security_mode: client.sent_security_mode(),

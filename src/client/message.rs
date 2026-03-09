@@ -153,7 +153,7 @@ pub async fn write_202_message<W: AsyncWrite + Unpin, M: MessageBody>(
         header.flags |= FLAG_SIGNED;
     }
     buffer.write_all(&header.to_bytes()).await.unwrap();
-    body.write_to(&mut buffer).unwrap();
+    body.write_to(&mut buffer);
     if add_null {
         buffer.push(0);
     }

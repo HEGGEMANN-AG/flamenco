@@ -1,5 +1,5 @@
 use std::{
-    io::{Cursor, Read, SeekFrom, Write},
+    io::{Cursor, Read, SeekFrom},
     num::NonZero,
     ops::BitOr,
     pin::Pin,
@@ -282,44 +282,42 @@ struct FileCreateRequest<'p> {
     path: &'p str,
 }
 impl MessageBody for FileCreateRequest<'_> {
-    type Err = std::io::Error;
     fn size_hint(&self) -> usize {
         56 + (self.path.chars().count() * 2)
     }
-    fn write_to<W: Write>(&self, w: &mut W) -> Result<(), Self::Err> {
-        w.write_all(&57u16.to_le_bytes())?;
-        w.write_all(&[0])?;
+    fn write_to(&self, w: &mut Vec<u8>) {
+        w.extend_from_slice(&57u16.to_le_bytes());
+        w.push(0);
         let oplock_byte: u8 = match self.oplock_level {
             None => 0x00,
             Some(OplockLevel202::II) => 0x01,
             Some(OplockLevel202::Exclusive) => 0x08,
             Some(OplockLevel202::Batch) => 0x09,
         };
-        w.write_all(&[oplock_byte])?;
+        w.push(oplock_byte);
         let imp_byte: u8 = match self.impersonation_level {
             ImpersonationLevel::Anonymous => 0x00,
             ImpersonationLevel::Identification => 0x01,
             ImpersonationLevel::Impersonation => 0x02,
             ImpersonationLevel::Delegate => 0x03,
         };
-        w.write_all(&u32::from(imp_byte).to_le_bytes())?;
-        w.write_all(&0u64.to_le_bytes())?;
-        w.write_all(&0u64.to_le_bytes())?;
-        w.write_all(&self.desired_access.0.to_le_bytes())?;
-        w.write_all(&self.file_attributes.to_le_bytes())?;
-        w.write_all(&self.share_access.0.to_le_bytes())?;
-        w.write_all(&self.create_disposition.to_u32().to_le_bytes())?;
+        w.extend_from_slice(&u32::from(imp_byte).to_le_bytes());
+        w.extend_from_slice(&0u64.to_le_bytes());
+        w.extend_from_slice(&0u64.to_le_bytes());
+        w.extend_from_slice(&self.desired_access.0.to_le_bytes());
+        w.extend_from_slice(&self.file_attributes.to_le_bytes());
+        w.extend_from_slice(&self.share_access.0.to_le_bytes());
+        w.extend_from_slice(&self.create_disposition.to_u32().to_le_bytes());
         // TODO create options
-        w.write_all(&self.create_options.to_le_bytes())?;
+        w.extend_from_slice(&self.create_options.to_le_bytes());
         let path = crate::to_wide(self.path);
         let offset: u16 = 64 + 56;
-        w.write_all(&offset.to_le_bytes())?;
-        w.write_all(&(path.len() as u16).to_le_bytes())?;
+        w.extend_from_slice(&offset.to_le_bytes());
+        w.extend_from_slice(&(path.len() as u16).to_le_bytes());
         let create_contexts_offset: u32 = 0;
-        w.write_all(&create_contexts_offset.to_le_bytes())?;
-        w.write_all(&0u32.to_le_bytes())?;
-        w.write_all(&path)?;
-        Ok(())
+        w.extend_from_slice(&create_contexts_offset.to_le_bytes());
+        w.extend_from_slice(&0u32.to_le_bytes());
+        w.extend_from_slice(&path);
     }
 }
 

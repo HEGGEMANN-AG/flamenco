@@ -1,6 +1,6 @@
 use std::{
     fmt::Debug,
-    io::{Cursor, Read, Seek, SeekFrom, Write},
+    io::{Cursor, Read, Seek, SeekFrom},
     num::NonZero,
     sync::Arc,
 };
@@ -247,42 +247,26 @@ struct SessionSetupRequest<'buf> {
     pub buffer: &'buf [u8],
 }
 impl MessageBody for SessionSetupRequest<'_> {
-    type Err = WriteError;
-    fn write_to<W: Write>(&self, w: &mut W) -> Result<(), Self::Err> {
-        w.write_all(&25u16.to_le_bytes())?;
+    fn write_to(&self, w: &mut Vec<u8>) {
+        w.extend_from_slice(&25u16.to_le_bytes());
         // flags
-        w.write_all(&[0])?;
+        w.push(0);
         // security mode
-        w.write_all(&[self.security_mode.to_value()])?;
-        w.write_all(&self.capabilities.to_le_bytes())?;
+        w.extend_from_slice(&[self.security_mode.to_value()]);
+        w.extend_from_slice(&self.capabilities.to_le_bytes());
         // channel
-        w.write_all(&0u32.to_le_bytes())?;
+        w.extend_from_slice(&0u32.to_le_bytes());
 
         let secbuf_offset: u16 = 64 + 24;
-        w.write_all(&secbuf_offset.to_le_bytes())?;
-        let Ok(secbuf_len): Result<u16, _> = self.buffer.len().try_into() else {
-            return Err(WriteError::BufferTooLong);
-        };
-        w.write_all(&secbuf_len.to_le_bytes())?;
+        w.extend_from_slice(&secbuf_offset.to_le_bytes());
+        let secbuf_len: u16 = self.buffer.len().try_into().unwrap();
+        w.extend_from_slice(&secbuf_len.to_le_bytes());
 
-        w.write_all(&self.previous_session_id.to_le_bytes())?;
-        w.write_all(self.buffer)?;
-        Ok(())
+        w.extend_from_slice(&self.previous_session_id.to_le_bytes());
+        w.extend_from_slice(self.buffer);
     }
     fn size_hint(&self) -> usize {
         24 + self.buffer.len()
-    }
-}
-
-#[derive(Debug)]
-enum WriteError {
-    Io(std::io::Error),
-    BufferTooLong,
-}
-
-impl From<std::io::Error> for WriteError {
-    fn from(value: std::io::Error) -> Self {
-        Self::Io(value)
     }
 }
 
@@ -334,11 +318,9 @@ enum SessionFlags {
 #[derive(Debug)]
 struct LogoffRequest;
 impl MessageBody for LogoffRequest {
-    type Err = std::io::Error;
-    fn write_to<W: Write>(&self, w: &mut W) -> Result<(), Self::Err> {
-        w.write_all(&4u32.to_le_bytes())?;
-        w.write_all(&0u32.to_le_bytes())?;
-        Ok(())
+    fn write_to(&self, w: &mut Vec<u8>) {
+        w.extend_from_slice(&4u32.to_le_bytes());
+        w.extend_from_slice(&0u32.to_le_bytes());
     }
     fn size_hint(&self) -> usize {
         4

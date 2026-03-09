@@ -1,7 +1,7 @@
 use uuid::Uuid;
 
 use crate::{ReadIntLe, message::MessageBody, sign::SecurityMode};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom};
 
 /// Negotiate request in SMB2020 must set client ID to 0
 #[derive(Debug)]
@@ -11,36 +11,24 @@ pub struct NegotiateRequest202 {
 }
 
 impl MessageBody for NegotiateRequest202 {
-    type Err = WriteError;
-    fn write_to<W: Write>(&self, w: &mut W) -> Result<(), Self::Err> {
+    fn write_to(&self, w: &mut Vec<u8>) {
         // structure size
-        w.write_all(&36u16.to_le_bytes())?;
+        w.extend_from_slice(&36u16.to_le_bytes());
         // dialect count
-        w.write_all(&1u16.to_le_bytes())?;
+        w.extend_from_slice(&1u16.to_le_bytes());
         // Empty security mode
-        w.write_all(&(self.security_mode as u16).to_le_bytes())?;
+        w.extend_from_slice(&(self.security_mode as u16).to_le_bytes());
         // Reserved
-        w.write_all(&0u16.to_le_bytes())?;
-        w.write_all(&self.capabilities.to_le_bytes())?;
-        w.write_all(&[0u8; 16])?;
+        w.extend_from_slice(&0u16.to_le_bytes());
+        w.extend_from_slice(&self.capabilities.to_le_bytes());
+        w.extend_from_slice(&[0u8; 16]);
         // client start time
-        w.write_all(&0u64.to_le_bytes())?;
+        w.extend_from_slice(&0u64.to_le_bytes());
         // dialect 202
-        w.write_all(&0x0202u16.to_le_bytes())?;
-        Ok(())
+        w.extend_from_slice(&0x0202u16.to_le_bytes());
     }
     fn size_hint(&self) -> usize {
         38
-    }
-}
-
-#[derive(Debug)]
-pub enum WriteError {
-    Io(std::io::Error),
-}
-impl From<std::io::Error> for WriteError {
-    fn from(value: std::io::Error) -> Self {
-        WriteError::Io(value)
     }
 }
 

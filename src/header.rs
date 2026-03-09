@@ -7,7 +7,7 @@ const PROTOCOL_ID: [u8; 4] = [0xFE, b'S', b'M', b'B'];
 pub(crate) const FLAG_SIGNED: u32 = 0x08;
 
 /// No status and signature, since they're not supported on the sender anyway
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct SyncHeader202Outgoing {
     pub command: Command202,
     pub credits: u16,
@@ -116,8 +116,9 @@ pub enum Error {
     InvalidCommand,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum Command202 {
+    #[default]
     Negotiate = 0x00,
     SessionSetup = 0x01,
     Logoff = 0x02,
