@@ -71,7 +71,7 @@ impl Session202 {
             let message_id = connection_lock.fetch_increment_message_id();
             let header = SyncHeader202Outgoing {
                 command: Command202::SessionSetup,
-                credits: 256,
+                credits: 1,
                 flags: 0,
                 next_command: None,
                 message_id,
@@ -152,7 +152,7 @@ impl Drop for Session202 {
         let mut lock = self.connection.inner.lock().unwrap();
         let logoff_header = SyncHeader202Outgoing {
             command: Command202::Logoff,
-            credits: 0,
+            credits: 1,
             flags: 0,
             next_command: None,
             message_id: lock.fetch_increment_message_id(),

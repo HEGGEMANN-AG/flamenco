@@ -26,7 +26,7 @@ impl SyncHeader202Outgoing {
             .fetch_increment_message_id();
         Self {
             command,
-            credits: 0,
+            credits: 1,
             flags: if session.requires_signing() {
                 FLAG_SIGNED
             } else {

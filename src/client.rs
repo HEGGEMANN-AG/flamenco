@@ -32,9 +32,9 @@ pub struct Client202 {
     pub guest_policy: GuestPolicy,
 }
 impl Client202 {
-    pub fn new(require_signing: bool) -> Arc<Self> {
+    pub fn new(requires_signing: bool) -> Arc<Self> {
         Self {
-            requires_signing: require_signing,
+            requires_signing,
             ..Default::default()
         }
         .into()
@@ -99,7 +99,7 @@ impl Connection {
         let mut tcp = TcpStream::connect(addr)?;
         let neg_header = SyncHeader202Outgoing {
             command: Command202::Negotiate,
-            credits: 0,
+            credits: 1,
             flags: 0,
             next_command: None,
             message_id: 0,
