@@ -54,10 +54,12 @@ impl std::fmt::Debug for File {
             .finish()
     }
 }
+
 impl File {
     pub(crate) async fn new(
         tree_connection: Arc<TreeConnection>,
         path: &str,
+        create_disposition: CreateDisposition,
     ) -> Result<File, OpenError> {
         let header = SyncHeader202Outgoing::from_tree_con(&tree_connection, Command202::Create);
         let request_body = FileCreateRequest {
@@ -70,7 +72,7 @@ impl File {
             file_attributes: 0x0,
             create_options: 0x40 | 0x200,
             share_access: ShareAccess::SHARE_READ,
-            create_disposition: CreateDisposition::Open,
+            create_disposition,
             path,
         };
         let session = tree_connection.session();

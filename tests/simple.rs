@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use flamenco::{
+    client::Client202, file::CreateDisposition, session::Session202, tree::TreeConnection,
 };
 use kenobi::{cred::Credentials, mech::Mechanism};
 use tokio::io::AsyncReadExt;
@@ -21,7 +23,11 @@ async fn main() {
     let tree = TreeConnection::new(session.clone(), &share_path)
         .await
         .unwrap();
-    let mut file = tree.clone().open_file(&file_path).await.unwrap();
+    let mut file = tree
+        .clone()
+        .open_file(&file_path, CreateDisposition::default())
+        .await
+        .unwrap();
     eprintln!("Opened file");
     let mut s = String::new();
     file.read_to_string(&mut s).await.unwrap();
