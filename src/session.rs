@@ -49,12 +49,13 @@ impl Session202 {
     }
     pub async fn new(
         connection: Arc<Connection>,
-        cred: &Credentials<Outbound>,
+        cred: Credentials<Outbound>,
         target_spn: Option<&str>,
     ) -> Result<Arc<Session202>, SessionSetupError> {
         let mut auth_context = match ClientBuilder::new_from_credentials(cred, target_spn)
             .request_delegation()
             .initialize()
+            .unwrap()
         {
             StepOut::Pending(pending) => pending,
             StepOut::Finished(_c) => unreachable!(),
@@ -94,7 +95,7 @@ impl Session202 {
             let SessionSetupResponse { flags, sec_buffer } =
                 SessionSetupResponse::read_from(Cursor::new(body))?;
 
-            auth_context = match auth_context.step(&sec_buffer) {
+            auth_context = match auth_context.step(&sec_buffer).unwrap() {
                 StepOut::Pending(p) => p,
                 StepOut::Finished(context) => {
                     let session_key = *context

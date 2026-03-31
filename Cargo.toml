@@ -7,10 +7,23 @@ edition = "2024"
 
 [dependencies]
 uuid = { version = "1.20.0", features = ["v4"] }
-kenobi = "0.2.0"
+kenobi = "0.4"
 sha2 = "0.10.9"
 hmac = "0.12.1"
-tokio = { version = "1.50.0", features = ["io-util", "macros", "net", "rt", "sync"] }
+tokio = { version = "1.50.0", features = [
+    "io-util",
+    "macros",
+    "net",
+    "rt",
+    "sync",
+] }
 
 [dev-dependencies]
-tokio = { version = "1.50.0", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync"] }
+tokio = { version = "1.50.0", features = [
+    "io-util",
+    "macros",
+    "net",
+    "rt",
+    "rt-multi-thread",
+    "sync",
+] }

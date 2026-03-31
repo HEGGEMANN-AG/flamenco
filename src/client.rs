@@ -136,7 +136,7 @@ impl Connection {
     }
     pub async fn setup_session(
         self: Arc<Self>,
-        credentials: &Credentials<Outbound>,
+        credentials: Credentials<Outbound>,
         target_spn: Option<&str>,
     ) -> Result<Arc<Session202>, SessionSetupError> {
         Session202::new(self, credentials, target_spn).await
