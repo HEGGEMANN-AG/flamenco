@@ -25,7 +25,7 @@ mod close;
 mod read;
 
 type ReadFuture = Pin<Box<dyn Future<Output = Result<Box<[u8]>, ReadFileError>> + Send + 'static>>;
-pub struct FileHandle {
+pub struct File {
     tree_connection: Arc<TreeConnection>,
     id: FileId,
     oplock_level: Option<OplockLevel202>,
@@ -38,7 +38,7 @@ pub struct FileHandle {
     change_time: u64,
     future: Option<ReadFuture>,
 }
-impl std::fmt::Debug for FileHandle {
+impl std::fmt::Debug for File {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FileHandle")
             .field("tree_connection", &self.tree_connection)
@@ -54,11 +54,11 @@ impl std::fmt::Debug for FileHandle {
             .finish()
     }
 }
-impl FileHandle {
+impl File {
     pub(crate) async fn new(
         tree_connection: Arc<TreeConnection>,
         path: &str,
-    ) -> Result<FileHandle, OpenError> {
+    ) -> Result<File, OpenError> {
         let header = SyncHeader202Outgoing::from_tree_con(&tree_connection, Command202::Create);
         let request_body = FileCreateRequest {
             oplock_level: None,
@@ -103,7 +103,7 @@ impl FileHandle {
             attributes,
             id,
         } = CreateResponse::read_from(&mut body.as_ref()).unwrap();
-        Ok(FileHandle {
+        Ok(File {
             oplock_level,
             offset: 0,
             tree_connection,
@@ -190,7 +190,7 @@ impl FileHandle {
         self.send_close().await
     }
 }
-impl AsyncRead for FileHandle {
+impl AsyncRead for File {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -231,7 +231,7 @@ impl AsyncRead for FileHandle {
         }
     }
 }
-impl AsyncSeek for FileHandle {
+impl AsyncSeek for File {
     fn start_seek(mut self: Pin<&mut Self>, pos: SeekFrom) -> std::io::Result<()> {
         let new = match pos {
             SeekFrom::Start(s) => s,

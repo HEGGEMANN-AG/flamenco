@@ -8,7 +8,7 @@ use std::{
 use crate::{
     ReadIntLe,
     error::{ErrorResponse2, ServerError},
-    file::{FileHandle, OpenError},
+    file::{File, OpenError},
     header::{Command202, SyncHeader202Incoming, SyncHeader202Outgoing},
     message::{MessageBody, ReadError as MsgReadError, WriteError as MsgWriteError},
     session::Session202,
@@ -79,8 +79,8 @@ impl TreeConnection {
     pub fn id(&self) -> NonZero<u32> {
         self.id
     }
-    pub async fn open_file(self: Arc<Self>, path: &str) -> Result<FileHandle, OpenError> {
-        FileHandle::new(self, path).await
+    pub async fn open_file(self: Arc<Self>, path: &str) -> Result<File, OpenError> {
+        File::new(self, path).await
     }
 }
 
