@@ -3,7 +3,7 @@ use std::{num::NonZero, sync::Arc};
 use crate::{
     error::{ErrorResponse2, ServerError},
     file::{
-        AccessMask, CreateDisposition, CreateResponse, FileCreateRequest, ImpersonationLevel,
+        self, AccessMask, CreateDisposition, CreateResponse, FileCreateRequest, ImpersonationLevel,
         ShareAccess,
     },
     header::{Command202, SyncHeader202Outgoing},
@@ -54,7 +54,12 @@ pub(crate) async fn create_dir(
         end_of_file,
         attributes,
         id,
-    } = CreateResponse::read_from(&mut body.as_ref()).unwrap();
+    } = CreateResponse::read_from(&mut body.as_ref()).map_err(|err| match err {
+        file::ReadError::Io(error) => CreateDirError::Io(error),
+        file::ReadError::InvalidStructureSize
+        | file::ReadError::InvalidOplockLevel
+        | file::ReadError::InvalidCreateAction => CreateDirError::InvalidMessage,
+    })?;
     Ok(())
 }
 
