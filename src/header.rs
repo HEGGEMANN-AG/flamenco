@@ -7,41 +7,36 @@ const PROTOCOL_ID: [u8; 4] = [0xFE, b'S', b'M', b'B'];
 pub(crate) const FLAG_SIGNED: u32 = 0x08;
 
 /// No status and signature, since they're not supported on the sender anyway
+#[derive(Debug, Default)]
 pub struct SyncHeader202Outgoing {
     pub command: Command202,
     pub credits: u16,
     pub flags: u32,
     pub next_command: Option<NonZero<u32>>,
     pub message_id: u64,
-    pub tree_id: u32,
-    pub session_id: u64,
+    pub tree_id: Option<NonZero<u32>>,
+    pub session_id: Option<NonZero<u64>>,
 }
 impl SyncHeader202Outgoing {
     pub fn from_session(session: &Session202, command: Command202) -> Self {
-        let message_id = session
-            .connection
-            .inner
-            .lock()
-            .unwrap()
-            .fetch_increment_message_id();
         Self {
             command,
-            credits: 1,
+            credits: 0,
             flags: if session.requires_signing() {
                 FLAG_SIGNED
             } else {
                 0
             },
             next_command: None,
-            message_id,
-            tree_id: 0,
-            session_id: session.id,
+            message_id: 0,
+            tree_id: None,
+            session_id: Some(session.id),
         }
     }
     pub fn from_tree_con(tree_con: &TreeConnection, command: Command202) -> Self {
         let header = Self::from_session(tree_con.session(), command);
         Self {
-            tree_id: tree_con.id(),
+            tree_id: Some(tree_con.id()),
             ..header
         }
     }
@@ -54,10 +49,10 @@ impl SyncHeader202Outgoing {
         bytes[12..14].copy_from_slice(&self.command.as_u16().to_le_bytes());
         bytes[14..16].copy_from_slice(&1u16.to_le_bytes());
         bytes[16..20].copy_from_slice(&self.flags.to_le_bytes());
-        bytes[20..24].copy_from_slice(&self.next_command.map_or(0, |n| n.get()).to_le_bytes());
+        bytes[20..24].copy_from_slice(&self.next_command.map_or(0, NonZero::get).to_le_bytes());
         bytes[24..32].copy_from_slice(&self.message_id.to_le_bytes());
-        bytes[36..40].copy_from_slice(&self.tree_id.to_le_bytes());
-        bytes[40..48].copy_from_slice(&self.session_id.to_le_bytes());
+        bytes[36..40].copy_from_slice(&self.tree_id.map_or(0, NonZero::get).to_le_bytes());
+        bytes[40..48].copy_from_slice(&self.session_id.map_or(0, NonZero::get).to_le_bytes());
         bytes
     }
 }
@@ -71,8 +66,8 @@ pub struct SyncHeader202Incoming {
     pub flags: u32,
     pub next_command: Option<NonZero<u32>>,
     pub message_id: u64,
-    pub tree_id: u32,
-    pub session_id: u64,
+    pub tree_id: Option<NonZero<u32>>,
+    pub session_id: Option<NonZero<u64>>,
     pub signature: [u8; 16],
 }
 impl SyncHeader202Incoming {
@@ -93,7 +88,9 @@ impl SyncHeader202Incoming {
         let next_command = NonZero::new(next_command);
         let message_id = u64::from_le_bytes(*b[24..32].as_array().unwrap());
         let tree_id = u32::from_le_bytes(*b[36..40].as_array().unwrap());
+        let tree_id = NonZero::new(tree_id);
         let session_id = u64::from_le_bytes(*b[40..48].as_array().unwrap());
+        let session_id = NonZero::new(session_id);
         let signature: [u8; 16] = *b.last_chunk().unwrap();
         Ok(Self {
             status,
@@ -107,6 +104,9 @@ impl SyncHeader202Incoming {
             signature,
         })
     }
+    pub fn is_async(&self) -> bool {
+        self.flags & 0x02 != 0
+    }
 }
 
 #[derive(Debug)]
@@ -116,8 +116,9 @@ pub enum Error {
     InvalidCommand,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum Command202 {
+    #[default]
     Negotiate = 0x00,
     SessionSetup = 0x01,
     Logoff = 0x02,

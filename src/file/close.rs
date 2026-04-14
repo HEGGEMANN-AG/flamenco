@@ -1,32 +1,25 @@
-use std::io::{Read, Write};
+use std::io::Read;
 
-use crate::{ReadLe, file::FileId, message::MessageBody};
+use crate::{ReadIntLe, file::FileId, message::MessageBody};
 
 #[derive(Clone, Copy, Debug)]
 pub struct CloseRequest {
     pub id: FileId,
 }
-impl CloseRequest {
-    fn write_into<W: Write>(&self, mut w: W) -> Result<(), std::io::Error> {
-        w.write_all(&24u16.to_le_bytes())?;
-        w.write_all(&0u16.to_le_bytes())?;
-        w.write_all(&0u32.to_le_bytes())?;
+impl MessageBody for CloseRequest {
+    fn size_hint(&self) -> usize {
+        24
+    }
+    fn write_to(&self, w: &mut Vec<u8>) {
+        w.extend_from_slice(&24u16.to_le_bytes());
+        w.extend_from_slice(&0u16.to_le_bytes());
+        w.extend_from_slice(&0u32.to_le_bytes());
         let FileId {
             persistent,
             volatile,
         } = self.id;
-        w.write_all(&persistent)?;
-        w.write_all(&volatile)?;
-        Ok(())
-    }
-}
-impl MessageBody for CloseRequest {
-    type Err = std::io::Error;
-    fn size_hint(&self) -> usize {
-        24
-    }
-    fn write_to<W: Write>(&self, w: W) -> Result<(), Self::Err> {
-        self.write_into(w)
+        w.extend_from_slice(&persistent);
+        w.extend_from_slice(&volatile);
     }
 }
 
@@ -40,18 +33,18 @@ pub struct CloseResponse {
     pub end_of_file: u64,
 }
 impl CloseResponse {
-    pub(crate) fn read_from<R: Read>(mut r: R) -> Result<Self, ReadCloseError> {
-        if r.read_u16()? != 60 {
+    pub(crate) fn read_from<R: Read>(r: &mut R) -> Result<Self, ReadCloseError> {
+        if r.read_u16_le()? != 60 {
             return Err(ReadCloseError::InvalidStructureSize);
         }
-        let _flags = r.read_u16()?;
-        let creation_time = r.read_u64()?;
-        let last_access_time = r.read_u64()?;
-        let last_write_time = r.read_u64()?;
-        let change_time = r.read_u64()?;
-        let allocation_size = r.read_u64()?;
-        let end_of_file = r.read_u64()?;
-        let _file_attributes = r.read_u32()?;
+        let _flags = r.read_u16_le()?;
+        let creation_time = r.read_u64_le()?;
+        let last_access_time = r.read_u64_le()?;
+        let last_write_time = r.read_u64_le()?;
+        let change_time = r.read_u64_le()?;
+        let allocation_size = r.read_u64_le()?;
+        let end_of_file = r.read_u64_le()?;
+        let _file_attributes = r.read_u32_le()?;
         Ok(Self {
             creation_time,
             last_access_time,
@@ -66,6 +59,7 @@ impl CloseResponse {
 #[derive(Debug)]
 pub enum ReadCloseError {
     Io(std::io::Error),
+    InvalidHeader,
     InvalidStructureSize,
 }
 impl From<std::io::Error> for ReadCloseError {

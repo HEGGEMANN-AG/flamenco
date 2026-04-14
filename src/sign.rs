@@ -1,3 +1,30 @@
+#[derive(Debug)]
+pub enum ValidationError {
+    InvalidSignature,
+    ChannelClosed,
+    SigningRequiredButMissing,
+}
+
+pub struct ValidationContext {
+    pub(crate) key: Option<[u8; 16]>,
+    pub(crate) requires_signing: bool,
+}
+impl std::fmt::Debug for ValidationContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ValidationContext")
+            .field(
+                "key",
+                &if self.key.is_some() {
+                    "Some(REDACTED)"
+                } else {
+                    "None"
+                },
+            )
+            .field("requires_signing", &self.requires_signing)
+            .finish()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SecurityMode {
     None,

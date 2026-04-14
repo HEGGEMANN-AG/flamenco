@@ -1,20 +1,38 @@
 use std::{
-    io::Cursor,
-    net::{TcpStream, ToSocketAddrs},
+    collections::HashMap,
+    fmt::Display,
+    io::{Cursor, ErrorKind},
     num::NonZero,
-    sync::{Arc, Mutex},
+    ops::DerefMut,
+    sync::{
+        Arc, Weak,
+        atomic::{AtomicU64, Ordering},
+    },
+};
+use tokio::{
+    net::{
+        TcpStream, ToSocketAddrs,
+        tcp::{OwnedReadHalf, OwnedWriteHalf},
+    },
+    sync::{
+        Mutex, RwLock,
+        oneshot::{Receiver, Sender},
+    },
 };
 
 use kenobi::cred::{Credentials, Outbound};
 
 use crate::{
+    client::message::IncomingMessage,
     error::{ErrorResponse2, ServerError},
-    header::{Command202, SyncHeader202Outgoing},
-    message::{ReadError, Validation, WriteError, read_202_message, write_202_message},
+    header::{Command202, SyncHeader202Incoming, SyncHeader202Outgoing},
+    message::{MessageBody, ReadError, WriteError},
     negotiate::{Dialect, NegotiateError, NegotiateRequest202, NegotiateResponse},
     session::{Session202, SessionSetupError},
-    sign::SecurityMode,
+    sign::{SecurityMode, ValidationContext},
 };
+
+mod message;
 
 const MINIMUM_TRANSACT_SIZE: u32 = 65536;
 
@@ -39,40 +57,71 @@ impl Client202 {
         }
         .into()
     }
-    pub fn connect(
+    fn sent_security_mode(&self) -> SecurityMode {
+        if self.requires_signing {
+            SecurityMode::SigningRequired
+        } else {
+            SecurityMode::SigningEnabled
+        }
+    }
+    pub async fn connect(
         self: Arc<Self>,
         addr: impl ToSocketAddrs,
     ) -> Result<Arc<Connection>, ConnectError> {
-        Connection::new(self, addr)
+        Connection::new(self, addr).await
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct ConnectionInner {
-    message_id: u64,
-    tcp: TcpStream,
-}
-impl ConnectionInner {
-    pub(crate) fn fetch_increment_message_id(&mut self) -> u64 {
-        let num = self.message_id;
-        self.message_id += 1;
-        num
-    }
-    pub(crate) fn stream_mut(&mut self) -> &mut TcpStream {
-        &mut self.tcp
-    }
-}
+pub(crate) type OutstandingRequests = HashMap<u64, Sender<(Arc<SyncHeader202Incoming>, Arc<[u8]>)>>;
+type OpenSessions = HashMap<NonZero<u64>, Weak<Session202>>;
 
 #[derive(Debug)]
 pub struct Connection {
     pub(crate) client: Arc<Client202>,
-    pub(crate) inner: Mutex<ConnectionInner>,
+    outstanding_requests: Arc<Mutex<OutstandingRequests>>,
+    open_sessions: Arc<RwLock<OpenSessions>>,
+    message_id: AtomicU64,
+    write_tcp: Mutex<OwnedWriteHalf>,
     max_transaction_size: u32,
     max_read_size: u32,
     max_write_size: u32,
-    server_requires_signing: bool,
+    /// What the server requires
+    requires_signing: bool,
+    shutdown_handle: Option<Sender<()>>,
 }
 impl Connection {
+    pub(crate) async fn signup_message(
+        &self,
+        mut header: SyncHeader202Outgoing,
+        msg: &impl MessageBody,
+        add_null: bool,
+        key: Option<[u8; 16]>,
+    ) -> Result<(Arc<SyncHeader202Incoming>, Arc<[u8]>), crate::message::WriteError> {
+        let mut wtcp = self.write_tcp.lock().await;
+        let next_message_id = self.message_id.fetch_add(1, Ordering::Relaxed);
+        header.message_id = next_message_id;
+        let (sx, rx) = tokio::sync::oneshot::channel();
+        self.outstanding_requests
+            .lock()
+            .await
+            .insert(next_message_id, sx);
+        message::write_202_message(wtcp.deref_mut(), key, header, msg, add_null).await?;
+        Ok(rx.await.expect("dropped sender?"))
+    }
+    pub(crate) async fn signup_session(
+        &self,
+        session_id: NonZero<u64>,
+        session: Weak<Session202>,
+    ) -> Result<(), ()> {
+        let mut map = self.open_sessions.write().await;
+        match map.insert(session_id, session) {
+            Some(_) => Err(()),
+            None => Ok(()),
+        }
+    }
+    pub(crate) async fn remove_session(&self, session_id: NonZero<u64>) {
+        self.open_sessions.write().await.remove(&session_id);
+    }
     pub fn max_transaction_size(&self) -> u32 {
         self.max_transaction_size
     }
@@ -83,65 +132,190 @@ impl Connection {
         self.max_write_size
     }
     pub fn server_requires_signing(&self) -> bool {
-        self.server_requires_signing
+        self.requires_signing
     }
-    pub fn setup_session(
+    pub async fn setup_session(
         self: Arc<Self>,
-        credentials: &Credentials<Outbound>,
+        credentials: Credentials<Outbound>,
         target_spn: Option<&str>,
     ) -> Result<Arc<Session202>, SessionSetupError> {
-        Session202::new(self, credentials, target_spn)
+        Session202::new(self, credentials, target_spn).await
     }
-    pub fn new(
+    pub async fn new(
         client: Arc<Client202>,
         addr: impl ToSocketAddrs,
     ) -> Result<Arc<Connection>, ConnectError> {
-        let mut tcp = TcpStream::connect(addr)?;
-        let neg_header = SyncHeader202Outgoing {
-            command: Command202::Negotiate,
-            credits: 1,
-            flags: 0,
-            next_command: None,
-            message_id: 0,
-            tree_id: 0,
-            session_id: 0,
-        };
+        let (rtcp, wtcp) = TcpStream::connect(addr).await?.into_split();
+        let neg_header = SyncHeader202Outgoing::default();
         let neg_req = NegotiateRequest202 {
             capabilities: 0,
-            security_mode: SecurityMode::None,
+            security_mode: client.sent_security_mode(),
         };
-        write_202_message(&mut tcp, None, neg_header, &neg_req, false)?;
-
-        let (header, body) = read_202_message(&mut tcp, Validation::ExpectNone)?;
+        let message_id = AtomicU64::default();
+        let outstanding_requests: Arc<Mutex<OutstandingRequests>> = Arc::default();
+        let open_sessions: Arc<RwLock<OpenSessions>> = Arc::default();
+        let (shutdown_handle, shutdown_recv) = tokio::sync::oneshot::channel();
+        let mut connection = Connection {
+            client,
+            outstanding_requests: outstanding_requests.clone(),
+            open_sessions: open_sessions.clone(),
+            message_id,
+            write_tcp: Mutex::new(wtcp),
+            max_transaction_size: 0,
+            max_read_size: 0,
+            max_write_size: 0,
+            requires_signing: false,
+            shutdown_handle: Some(shutdown_handle),
+        };
+        let drive = Self::drive(open_sessions, outstanding_requests, rtcp, shutdown_recv);
+        tokio::spawn(drive);
+        let (header, body) = connection
+            .signup_message(neg_header, &neg_req, false, None)
+            .await?;
+        if header.command != Command202::Negotiate {
+            return Err(ConnectError::InvalidMessage);
+        }
         if let Some(code) = NonZero::new(header.status) {
             return Err(ConnectError::handle_error_body(code, &body));
         }
-        if header.command != Command202::Negotiate || header.message_id != 0 {
-            return Err(ConnectError::InvalidMessage);
-        }
-        let neg_resp = NegotiateResponse::read_from(Cursor::new(body))?;
+        verify_negotiate_header(&header)?;
+        let neg_resp = NegotiateResponse::read_from(&mut Cursor::new(body))?;
         if neg_resp.max_transact_size < MINIMUM_TRANSACT_SIZE
             || neg_resp.max_read_size < MINIMUM_TRANSACT_SIZE
             || neg_resp.max_write_size < MINIMUM_TRANSACT_SIZE
         {
             return Err(ConnectError::MaxMessageSizeInsufficient);
         }
-        let server_requires_signing = neg_resp.security_mode == SecurityMode::SigningRequired;
         match neg_resp.dialect {
             Dialect::SMB2020 => {}
             Dialect::Wildcard => unimplemented!(),
             _ => return Err(ConnectError::ServerChoseUnsupportedDialect),
         }
+        connection.requires_signing = neg_resp.security_mode == SecurityMode::SigningRequired;
+        connection.max_read_size = neg_resp.max_read_size;
+        connection.max_transaction_size = neg_resp.max_transact_size;
+        connection.max_write_size = neg_resp.max_write_size;
+        Ok(Arc::new(connection))
+    }
+    async fn drive(
+        open_sessions: Arc<RwLock<OpenSessions>>,
+        outstanding_requests: Arc<Mutex<OutstandingRequests>>,
+        mut tcp: OwnedReadHalf,
+        mut disconnector: Receiver<()>,
+    ) {
+        loop {
+            let (ctx_sender, ctx_receiver) = tokio::sync::oneshot::channel();
+            let read_message = message::read_202_message(&mut tcp, ctx_receiver);
+            let read_result = tokio::select! {
+                x = read_message => x,
+                _ = &mut disconnector => {
+                    return;
+                }
+            };
+            let IncomingMessage {
+                header,
+                content,
+                signature_validator,
+            } = match read_result {
+                Ok(v) => v,
+                Err(ReadError::Connection(io)) if io.kind() == ErrorKind::ConnectionReset => {
+                    break;
+                }
+                Err(err) => {
+                    eprintln!("Error reading message: {err:?}");
+                    continue;
+                }
+            };
+            let session_opt = {
+                let lock = open_sessions.read().await;
+                header.session_id.and_then(|id| lock.get(&id).cloned())
+            };
 
-        Ok(Connection {
-            client,
-            inner: Mutex::new(ConnectionInner { message_id: 1, tcp }),
-            max_transaction_size: neg_resp.max_transact_size,
-            max_read_size: neg_resp.max_read_size,
-            max_write_size: neg_resp.max_write_size,
-            server_requires_signing,
+            let out_of_session = matches!(
+                header.command,
+                Command202::Negotiate | Command202::SessionSetup | Command202::Logoff
+            );
+
+            match session_opt {
+                Some(weak) => match Weak::upgrade(&weak) {
+                    Some(session) => {
+                        let validation_context = ValidationContext {
+                            key: Some(*session.session_key()),
+                            requires_signing: session.requires_signing(),
+                        };
+                        if ctx_sender.send(validation_context).is_err() {
+                            eprintln!("Validator dropped before receiving context");
+                            continue;
+                        };
+
+                        if signature_validator.await.is_err() {
+                            eprintln!("Bad signature on message");
+                            return;
+                        };
+
+                        // Validation passed
+                        let message_id = header.message_id;
+                        let Some(message_sender) =
+                            outstanding_requests.lock().await.remove(&message_id)
+                        else {
+                            eprintln!("Message request not found");
+                            continue;
+                        };
+                        if message_sender.send((header, content)).is_err() {
+                            eprintln!("Message receiver for {message_id} closed early");
+                        };
+                    }
+                    None => {
+                        eprintln!("Session looked for was removed");
+                    }
+                },
+                None => {
+                    if out_of_session {
+                        let ctx = ValidationContext {
+                            key: None,
+                            requires_signing: false,
+                        };
+                        if ctx_sender.send(ctx).is_err() {
+                            eprintln!("Validator dropped for out-of-session message");
+                            continue;
+                        }
+
+                        let message_id = header.message_id;
+                        let Some(message_sender) =
+                            outstanding_requests.lock().await.remove(&message_id)
+                        else {
+                            eprintln!(
+                                "No outstanding messager for out-of-session message id {message_id}"
+                            );
+                            continue;
+                        };
+                        if message_sender.send((header, content)).is_err() {
+                            eprintln!("Receiver dropped for out-of-session message_id");
+                        }
+                    } else {
+                        eprintln!("received in-session command with no matching session");
+                    }
+                }
+            }
         }
-        .into())
+    }
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        let _ = self.shutdown_handle.take().unwrap().send(());
+    }
+}
+
+fn verify_negotiate_header(header: &SyncHeader202Incoming) -> Result<(), ConnectError> {
+    if header.command != Command202::Negotiate
+        || header.is_async()
+        || header.tree_id.is_some()
+        || header.session_id.is_some()
+    {
+        Err(ConnectError::InvalidMessage)
+    } else {
+        Ok(())
     }
 }
 
@@ -155,6 +329,32 @@ pub enum ConnectError {
         code: NonZero<u32>,
         body: ErrorResponse2,
     },
+}
+impl std::error::Error for ConnectError {
+    fn cause(&self) -> Option<&dyn std::error::Error> {
+        match self {
+            Self::InvalidMessage
+            | Self::MaxMessageSizeInsufficient
+            | Self::ServerChoseUnsupportedDialect
+            | Self::ServerError { .. } => None,
+            Self::Io(io) => Some(io),
+        }
+    }
+}
+impl Display for ConnectError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidMessage => write!(f, "Server returned invalid message"),
+            Self::MaxMessageSizeInsufficient => {
+                write!(f, "Maximum message size exceeds protocol minimum")
+            }
+            Self::ServerChoseUnsupportedDialect => write!(f, "Server chose unsupported dialect"),
+            Self::ServerError { code, .. } => {
+                write!(f, "Server returned error response. Code {code:x}")
+            }
+            Self::Io(io) => write!(f, "IO error: {io}"),
+        }
+    }
 }
 impl ServerError for ConnectError {
     fn invalid_message() -> Self {
@@ -181,10 +381,9 @@ impl From<ReadError> for ConnectError {
     fn from(value: ReadError) -> Self {
         match value {
             ReadError::Connection(io) => Self::Io(io),
-            ReadError::InvalidSignature
-            | ReadError::NotSigned
-            | ReadError::InvalidlySignedMessage
-            | ReadError::NetBIOS => Self::InvalidMessage,
+            ReadError::InvalidlySignedMessage | ReadError::InvalidNetbiosLength => {
+                Self::InvalidMessage
+            }
         }
     }
 }

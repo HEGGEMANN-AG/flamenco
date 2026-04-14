@@ -1,10 +1,10 @@
 use std::{
-    io::{Read, Seek, SeekFrom, Write},
+    io::{Read, Seek, SeekFrom},
     num::NonZero,
 };
 
 use crate::{
-    ReadLe,
+    ReadIntLe,
     error::{ErrorResponse2, ServerError},
     file::FileId,
     message::MessageBody,
@@ -19,38 +19,33 @@ pub struct ReadRequest {
 }
 impl ReadRequest {
     const STRUCTURE_SIZE: u16 = 49;
-    pub fn write_into<W: Write>(&self, mut w: W) -> Result<(), std::io::Error> {
-        w.write_all(&Self::STRUCTURE_SIZE.to_le_bytes())?;
-        w.write_all(&[64 + 16])?;
+}
+impl MessageBody for ReadRequest {
+    fn size_hint(&self) -> usize {
+        48
+    }
+    fn write_to(&self, w: &mut Vec<u8>) {
+        w.extend_from_slice(&Self::STRUCTURE_SIZE.to_le_bytes());
+        w.push(64 + 16);
         // in 2.0.2, 2.1 and 3.0 this field must not be used
-        w.write_all(&[0])?;
-        w.write_all(&self.length.to_le_bytes())?;
-        w.write_all(&self.offset.to_le_bytes())?;
+        w.push(0);
+        w.extend_from_slice(&self.length.to_le_bytes());
+        w.extend_from_slice(&self.offset.to_le_bytes());
         let FileId {
             persistent,
             volatile,
         } = self.id;
-        w.write_all(&persistent)?;
-        w.write_all(&volatile)?;
-        w.write_all(&self.minimum_count.to_le_bytes())?;
+        w.extend_from_slice(&persistent);
+        w.extend_from_slice(&volatile);
+        w.extend_from_slice(&self.minimum_count.to_le_bytes());
         // Channel
-        w.write_all(&0u32.to_le_bytes())?;
+        w.extend_from_slice(&0u32.to_le_bytes());
         // Remaining Bytes
-        w.write_all(&0u32.to_le_bytes())?;
+        w.extend_from_slice(&0u32.to_le_bytes());
         // Channel Info Offset
-        w.write_all(&0u16.to_le_bytes())?;
+        w.extend_from_slice(&0u16.to_le_bytes());
         // Channel Info Length
-        w.write_all(&0u16.to_le_bytes())?;
-        Ok(())
-    }
-}
-impl MessageBody for ReadRequest {
-    type Err = std::io::Error;
-    fn size_hint(&self) -> usize {
-        48
-    }
-    fn write_to<W: Write>(&self, w: W) -> Result<(), Self::Err> {
-        self.write_into(w)
+        w.extend_from_slice(&0u16.to_le_bytes());
     }
 }
 
@@ -62,15 +57,15 @@ impl ReadResponse {
         self.0
     }
     pub fn read_from<R: Read + Seek>(mut r: R) -> Result<Self, ReadResponseError> {
-        if r.read_u16()? != Self::STRUCTURE_SIZE {
+        if r.read_u16_le()? != Self::STRUCTURE_SIZE {
             return Err(ReadResponseError::InvalidMessage);
         }
         let mut offset = 0;
         r.read_exact(std::slice::from_mut(&mut offset))?;
-        r.seek_relative(1)?;
-        let data_length = r.read_u32()?;
-        let _data_remaining = r.read_u32()?;
-        r.seek_relative(4)?;
+        r.seek(SeekFrom::Current(1))?;
+        let data_length = r.read_u32_le()?;
+        let _data_remaining = r.read_u32_le()?;
+        r.seek(SeekFrom::Current(4))?;
         if offset < 64 + 16 {
             Err(ReadResponseError::InvalidMessage)
         } else {
