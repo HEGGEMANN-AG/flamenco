@@ -1,11 +1,13 @@
 use std::{num::NonZero, sync::Arc};
 
 use crate::{
+    error::{ErrorResponse2, ServerError},
     file::{
         AccessMask, CreateDisposition, CreateResponse, FileCreateRequest, ImpersonationLevel,
         ShareAccess,
     },
     header::{Command202, SyncHeader202Outgoing},
+    message,
     tree::TreeConnection,
 };
 
@@ -13,7 +15,7 @@ pub(crate) async fn create_dir(
     tree_connection: Arc<TreeConnection>,
     path: &str,
     create_disposition: DirCreateDisposition,
-) {
+) -> Result<(), CreateDirError> {
     let header = SyncHeader202Outgoing::from_tree_con(&tree_connection, Command202::Create);
     let request = FileCreateRequest {
         oplock_level: None,
@@ -34,9 +36,12 @@ pub(crate) async fn create_dir(
         .connection
         .signup_message(header, &request, false, key)
         .await
-        .unwrap();
+        .map_err(|err| match err {
+            message::WriteError::Connection(error) => CreateDirError::Io(error),
+            message::WriteError::MessageTooLong => CreateDirError::InvalidMessage,
+        })?;
     if let Some(code) = NonZero::new(header.status) {
-        panic!("Server sent code {code}");
+        return Err(ServerError::handle_error_body(code, &body));
     }
     let CreateResponse {
         oplock_level,
@@ -50,6 +55,31 @@ pub(crate) async fn create_dir(
         attributes,
         id,
     } = CreateResponse::read_from(&mut body.as_ref()).unwrap();
+    Ok(())
+}
+
+#[derive(Debug)]
+pub enum CreateDirError {
+    InvalidMessage,
+    Io(std::io::Error),
+    ServerError {
+        code: NonZero<u32>,
+        body: ErrorResponse2,
+    },
+}
+impl From<std::io::Error> for CreateDirError {
+    fn from(value: std::io::Error) -> Self {
+        Self::Io(value)
+    }
+}
+impl ServerError for CreateDirError {
+    fn invalid_message() -> Self {
+        Self::InvalidMessage
+    }
+
+    fn parsed(code: NonZero<u32>, body: ErrorResponse2) -> Self {
+        Self::ServerError { code, body }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
