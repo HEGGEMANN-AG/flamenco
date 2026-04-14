@@ -13,6 +13,8 @@ mod share_name;
 mod sign;
 pub mod tree;
 
+pub const SMB_DEFAULT_PORT: u16 = 445;
+
 fn to_wide(s: &str) -> Vec<u8> {
     s.encode_utf16()
         .flat_map(|c| c.to_le_bytes())
