@@ -22,7 +22,7 @@ pub(crate) async fn create_dir(
         file_attributes: 0x0,
         share_access: ShareAccess::SHARE_READ,
         create_disposition: create_disposition.into(),
-        create_options: 0x1 | 0x200,
+        create_options: 0x1,
         path,
     };
     let session = tree_connection.session();
