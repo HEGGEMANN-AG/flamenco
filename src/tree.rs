@@ -86,6 +86,9 @@ impl TreeConnection {
     ) -> Result<File, OpenError> {
         File::new(self, path, create_disposition).await
     }
+    pub async fn create_dir(self: Arc<Self>, path: &str) {
+        crate::dir::create_dir(self, path, crate::dir::DirCreateDisposition::Create).await
+    }
 }
 
 fn verify_tree_connect_header(header: &SyncHeader202Incoming) -> Result<(), TreeConnectError> {
