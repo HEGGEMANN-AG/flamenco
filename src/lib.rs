@@ -1,6 +1,7 @@
 use std::io::Read;
 
 pub mod client;
+pub mod dir;
 mod error;
 pub mod file;
 mod header;
