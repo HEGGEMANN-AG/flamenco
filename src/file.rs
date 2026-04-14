@@ -273,15 +273,15 @@ fn verify_close_header(header: &SyncHeader202Incoming) -> Result<(), ReadCloseEr
 }
 
 #[derive(Debug)]
-struct FileCreateRequest<'p> {
-    oplock_level: Option<OplockLevel202>,
-    impersonation_level: ImpersonationLevel,
-    desired_access: AccessMask,
-    file_attributes: u32,
-    share_access: ShareAccess,
-    create_disposition: CreateDisposition,
-    create_options: u32,
-    path: &'p str,
+pub(crate) struct FileCreateRequest<'p> {
+    pub(crate) oplock_level: Option<OplockLevel202>,
+    pub(crate) impersonation_level: ImpersonationLevel,
+    pub(crate) desired_access: AccessMask,
+    pub(crate) file_attributes: u32,
+    pub(crate) share_access: ShareAccess,
+    pub(crate) create_disposition: CreateDisposition,
+    pub(crate) create_options: u32,
+    pub(crate) path: &'p str,
 }
 impl MessageBody for FileCreateRequest<'_> {
     fn size_hint(&self) -> usize {
@@ -365,26 +365,26 @@ pub enum ImpersonationLevel {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AccessMask(u32);
 impl AccessMask {
-    const READ_DATA: Self = Self(0x01);
-    const WRITE_DATA: Self = Self(0x02);
-    const APPEND_DATA: Self = Self(0x04);
-    const READ_EA: Self = Self(0x08);
-    const WRITE_EA: Self = Self(0x10);
-    const DELETE_CHILD: Self = Self(0x40);
-    const EXECUTE: Self = Self(0x20);
-    const READ_ATTRIBUTES: Self = Self(0x80);
-    const WRITE_ATTRIBUTES: Self = Self(0x100);
-    const DELETE: Self = Self(0x10000);
-    const READ_CONTROL: Self = Self(0x20000);
-    const WRITE_DAC: Self = Self(0x40000);
-    const WRITE_OWNER: Self = Self(0x80000);
-    const SYNCHRONIZE: Self = Self(0x100000);
-    const ACCESS_SYSTEM_SECURITY: Self = Self(0x1000000);
-    const MAXIMUM_ALLOWED: Self = Self(0x2000000);
-    const GENERIC_ALL: Self = Self(0x10000000);
-    const GENERIC_EXECUTE: Self = Self(0x20000000);
-    const GENERIC_WRITE: Self = Self(0x40000000);
-    const GENERIC_READ: Self = Self(0x80000000);
+    pub(crate) const READ_DATA: Self = Self(0x01);
+    pub(crate) const WRITE_DATA: Self = Self(0x02);
+    pub(crate) const APPEND_DATA: Self = Self(0x04);
+    pub(crate) const READ_EA: Self = Self(0x08);
+    pub(crate) const WRITE_EA: Self = Self(0x10);
+    pub(crate) const DELETE_CHILD: Self = Self(0x40);
+    pub(crate) const EXECUTE: Self = Self(0x20);
+    pub(crate) const READ_ATTRIBUTES: Self = Self(0x80);
+    pub(crate) const WRITE_ATTRIBUTES: Self = Self(0x100);
+    pub(crate) const DELETE: Self = Self(0x10000);
+    pub(crate) const READ_CONTROL: Self = Self(0x20000);
+    pub(crate) const WRITE_DAC: Self = Self(0x40000);
+    pub(crate) const WRITE_OWNER: Self = Self(0x80000);
+    pub(crate) const SYNCHRONIZE: Self = Self(0x100000);
+    pub(crate) const ACCESS_SYSTEM_SECURITY: Self = Self(0x1000000);
+    pub(crate) const MAXIMUM_ALLOWED: Self = Self(0x2000000);
+    pub(crate) const GENERIC_ALL: Self = Self(0x10000000);
+    pub(crate) const GENERIC_EXECUTE: Self = Self(0x20000000);
+    pub(crate) const GENERIC_WRITE: Self = Self(0x40000000);
+    pub(crate) const GENERIC_READ: Self = Self(0x80000000);
 
     pub fn empty() -> Self {
         Self::default()
@@ -398,11 +398,11 @@ impl BitOr for AccessMask {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-struct ShareAccess(u32);
+pub(crate) struct ShareAccess(u32);
 impl ShareAccess {
-    const SHARE_READ: Self = Self(0x01);
-    const SHARE_WRITE: Self = Self(0x02);
-    const SHARE_DELETE: Self = Self(0x04);
+    pub(crate) const SHARE_READ: Self = Self(0x01);
+    pub(crate) const SHARE_WRITE: Self = Self(0x02);
+    pub(crate) const SHARE_DELETE: Self = Self(0x04);
     fn empty() -> Self {
         Self::default()
     }
@@ -438,21 +438,21 @@ impl CreateDisposition {
 }
 
 #[derive(Debug)]
-struct CreateResponse {
-    oplock_level: Option<OplockLevel202>,
-    create_action: CreateActionTaken,
-    creation_time: u64,
-    last_access_time: u64,
-    last_write_time: u64,
-    change_time: u64,
-    allocation_size: u64,
-    end_of_file: u64,
-    attributes: u32,
-    id: FileId,
+pub(crate) struct CreateResponse {
+    pub(crate) oplock_level: Option<OplockLevel202>,
+    pub(crate) create_action: CreateActionTaken,
+    pub(crate) creation_time: u64,
+    pub(crate) last_access_time: u64,
+    pub(crate) last_write_time: u64,
+    pub(crate) change_time: u64,
+    pub(crate) allocation_size: u64,
+    pub(crate) end_of_file: u64,
+    pub(crate) attributes: u32,
+    pub(crate) id: FileId,
 }
 impl CreateResponse {
     const STRUCTURE_SIZE: u16 = 89;
-    fn read_from<R: Read>(r: &mut R) -> Result<Self, ReadError> {
+    pub(crate) fn read_from<R: Read>(r: &mut R) -> Result<Self, ReadError> {
         if r.read_u16_le()? != Self::STRUCTURE_SIZE {
             return Err(ReadError::InvalidStructureSize);
         }
@@ -509,7 +509,7 @@ impl CreateResponse {
     }
 }
 #[derive(Debug)]
-enum ReadError {
+pub(crate) enum ReadError {
     Io(std::io::Error),
     InvalidStructureSize,
     InvalidOplockLevel,
@@ -522,7 +522,7 @@ impl From<std::io::Error> for ReadError {
 }
 
 #[derive(Clone, Copy, Debug)]
-enum CreateActionTaken {
+pub(crate) enum CreateActionTaken {
     Superseded,
     Opened,
     Created,
