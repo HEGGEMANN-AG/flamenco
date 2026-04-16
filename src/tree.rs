@@ -9,7 +9,7 @@ use crate::{
     ReadIntLe,
     dir::CreateDirError,
     error::{ErrorResponse2, ServerError},
-    file::{CreateDisposition, File, OpenError},
+    file::{File, OpenError, create::CreateDisposition},
     header::{Command202, SyncHeader202Incoming, SyncHeader202Outgoing},
     message::{MessageBody, ReadError as MsgReadError, WriteError as MsgWriteError},
     session::Session202,
@@ -25,15 +25,9 @@ pub struct TreeConnection {
     id: NonZero<u32>,
 }
 impl TreeConnection {
-    pub async fn new(
-        session: Arc<Session202>,
-        path: &str,
-    ) -> Result<Arc<TreeConnection>, TreeConnectError> {
+    pub async fn new(session: Arc<Session202>, path: &str) -> Result<Arc<TreeConnection>, TreeConnectError> {
         let tc_header = SyncHeader202Outgoing::from_session(&session, Command202::TreeConnect);
-        let session_key = session
-            .requires_signing()
-            .then_some(session.session_key())
-            .copied();
+        let session_key = session.requires_signing().then_some(session.session_key()).copied();
         if let Err(e) = parse_share_path(path) {
             return Err(TreeConnectError::InvalidPath(e));
         };
@@ -99,9 +93,7 @@ fn verify_tree_connect_header(header: &SyncHeader202Incoming) -> Result<(), Tree
     Ok(())
 }
 
-fn verify_tree_disconnect_header(
-    header: &SyncHeader202Incoming,
-) -> Result<(), TreeDisconnectError> {
+fn verify_tree_disconnect_header(header: &SyncHeader202Incoming) -> Result<(), TreeDisconnectError> {
     if header.command != Command202::TreeDisconnect || header.is_async() {
         Err(TreeDisconnectError::InvalidMessage)
     } else {
@@ -114,10 +106,7 @@ pub enum TreeConnectError {
     Io(std::io::Error),
     InvalidPath(InvalidSharePath),
     InvalidMessage,
-    Server {
-        code: NonZero<u32>,
-        body: ErrorResponse2,
-    },
+    Server { code: NonZero<u32>, body: ErrorResponse2 },
 }
 impl ServerError for TreeConnectError {
     fn invalid_message() -> Self {
@@ -138,9 +127,7 @@ impl From<MsgWriteError> for TreeConnectError {
 impl From<MsgReadError> for TreeConnectError {
     fn from(value: MsgReadError) -> Self {
         match value {
-            MsgReadError::InvalidNetbiosLength | MsgReadError::InvalidlySignedMessage => {
-                Self::InvalidMessage
-            }
+            MsgReadError::InvalidNetbiosLength | MsgReadError::InvalidlySignedMessage => Self::InvalidMessage,
             MsgReadError::Connection(error) => Self::Io(error),
         }
     }

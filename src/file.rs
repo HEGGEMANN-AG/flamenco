@@ -1,5 +1,5 @@
 use std::{
-    io::{Cursor, Read, SeekFrom},
+    io::{Cursor, SeekFrom},
     num::NonZero,
     ops::BitOr,
     pin::Pin,
@@ -10,19 +10,25 @@ use std::{
 use tokio::io::{AsyncRead, AsyncSeek, ReadBuf};
 
 use crate::{
-    ReadIntLe,
     error::{ErrorResponse2, ServerError},
     file::{
         close::{CloseRequest, CloseResponse, ReadCloseError},
+        create::{CreateResponse, FileCreateRequest},
         read::{ReadFileError, ReadRequest, ReadResponse, ReadResponseError},
     },
     header::{Command202, SyncHeader202Incoming, SyncHeader202Outgoing},
-    message::{MessageBody, WriteError},
+    ioctl::SourceKey,
+    message::WriteError,
     tree::TreeConnection,
 };
 
+pub use create::CreateDisposition;
+
 mod close;
+pub(crate) mod create;
 mod read;
+mod resume_key;
+pub mod server_copy;
 
 type ReadFuture = Pin<Box<dyn Future<Output = Result<Box<[u8]>, ReadFileError>> + Send + 'static>>;
 pub struct File {
@@ -66,20 +72,18 @@ impl File {
             oplock_level: None,
             impersonation_level: ImpersonationLevel::Impersonation,
             desired_access: AccessMask::READ_DATA
+                | AccessMask::WRITE_DATA
                 | AccessMask::READ_ATTRIBUTES
                 | AccessMask::READ_EA
                 | AccessMask::READ_CONTROL,
             file_attributes: 0x0,
             create_options: 0x40 | 0x200,
-            share_access: ShareAccess::SHARE_READ,
+            share_access: ShareAccess::SHARE_READ | ShareAccess::SHARE_WRITE,
             create_disposition,
             path,
         };
         let session = tree_connection.session();
-        let key = session
-            .requires_signing()
-            .then_some(session.session_key())
-            .copied();
+        let key = session.requires_signing().then_some(session.session_key()).copied();
 
         let (header, body) = session
             .connection
@@ -131,10 +135,7 @@ impl File {
     ) -> Result<Box<[u8]>, ReadFileError> {
         let header = SyncHeader202Outgoing::from_tree_con(&tree_connection, Command202::Read);
         let session = tree_connection.session();
-        let key = session
-            .requires_signing()
-            .then_some(session.session_key())
-            .copied();
+        let key = session.requires_signing().then_some(session.session_key()).copied();
         let req = ReadRequest {
             length,
             offset,
@@ -162,16 +163,10 @@ impl File {
     async fn send_close(&mut self) -> Result<(), std::io::Error> {
         Self::send_close_raw(self.tree_connection.clone(), self.id).await
     }
-    async fn send_close_raw(
-        tree_connection: Arc<TreeConnection>,
-        id: FileId,
-    ) -> Result<(), std::io::Error> {
+    async fn send_close_raw(tree_connection: Arc<TreeConnection>, id: FileId) -> Result<(), std::io::Error> {
         let header = SyncHeader202Outgoing::from_tree_con(&tree_connection, Command202::Close);
         let session = tree_connection.session();
-        let session_key = session
-            .requires_signing()
-            .then_some(session.session_key())
-            .copied();
+        let session_key = session.requires_signing().then_some(session.session_key()).copied();
         let (header, body) = match session
             .connection
             .signup_message(header, &CloseRequest { id }, false, session_key)
@@ -191,13 +186,15 @@ impl File {
     pub async fn close(mut self) -> Result<(), std::io::Error> {
         self.send_close().await
     }
+    pub async fn get_resume_key(&self) -> SourceKey {
+        resume_key::get_resume_key(self).await
+    }
+    pub async fn copy_to<R: server_copy::FileRange>(&self, to: &Self, chunks: &[server_copy::Chunk<R>]) {
+        server_copy::server_copy(self, to, chunks).await
+    }
 }
 impl AsyncRead for File {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
+    fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
         let until_end = self.end_of_file.saturating_sub(self.offset);
         if until_end == 0 {
             return Poll::Ready(Ok(()));
@@ -273,64 +270,10 @@ fn verify_close_header(header: &SyncHeader202Incoming) -> Result<(), ReadCloseEr
 }
 
 #[derive(Debug)]
-pub(crate) struct FileCreateRequest<'p> {
-    pub(crate) oplock_level: Option<OplockLevel202>,
-    pub(crate) impersonation_level: ImpersonationLevel,
-    pub(crate) desired_access: AccessMask,
-    pub(crate) file_attributes: u32,
-    pub(crate) share_access: ShareAccess,
-    pub(crate) create_disposition: CreateDisposition,
-    pub(crate) create_options: u32,
-    pub(crate) path: &'p str,
-}
-impl MessageBody for FileCreateRequest<'_> {
-    fn size_hint(&self) -> usize {
-        56 + (self.path.chars().count() * 2)
-    }
-    fn write_to(&self, w: &mut Vec<u8>) {
-        w.extend_from_slice(&57u16.to_le_bytes());
-        w.push(0);
-        let oplock_byte: u8 = match self.oplock_level {
-            None => 0x00,
-            Some(OplockLevel202::II) => 0x01,
-            Some(OplockLevel202::Exclusive) => 0x08,
-            Some(OplockLevel202::Batch) => 0x09,
-        };
-        w.push(oplock_byte);
-        let imp_byte: u8 = match self.impersonation_level {
-            ImpersonationLevel::Anonymous => 0x00,
-            ImpersonationLevel::Identification => 0x01,
-            ImpersonationLevel::Impersonation => 0x02,
-            ImpersonationLevel::Delegate => 0x03,
-        };
-        w.extend_from_slice(&u32::from(imp_byte).to_le_bytes());
-        w.extend_from_slice(&0u64.to_le_bytes());
-        w.extend_from_slice(&0u64.to_le_bytes());
-        w.extend_from_slice(&self.desired_access.0.to_le_bytes());
-        w.extend_from_slice(&self.file_attributes.to_le_bytes());
-        w.extend_from_slice(&self.share_access.0.to_le_bytes());
-        w.extend_from_slice(&self.create_disposition.to_u32().to_le_bytes());
-        // TODO create options
-        w.extend_from_slice(&self.create_options.to_le_bytes());
-        let path = crate::to_wide(self.path);
-        let offset: u16 = 64 + 56;
-        w.extend_from_slice(&offset.to_le_bytes());
-        w.extend_from_slice(&(path.len() as u16).to_le_bytes());
-        let create_contexts_offset: u32 = 0;
-        w.extend_from_slice(&create_contexts_offset.to_le_bytes());
-        w.extend_from_slice(&0u32.to_le_bytes());
-        w.extend_from_slice(&path);
-    }
-}
-
-#[derive(Debug)]
 pub enum OpenError {
     Io(std::io::Error),
     InvalidMessage,
-    ServerError {
-        code: NonZero<u32>,
-        body: ErrorResponse2,
-    },
+    ServerError { code: NonZero<u32>, body: ErrorResponse2 },
 }
 impl From<std::io::Error> for OpenError {
     fn from(value: std::io::Error) -> Self {
@@ -414,123 +357,15 @@ impl BitOr for ShareAccess {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub enum CreateDisposition {
-    Supersede,
-    #[default]
-    Open,
-    Create,
-    OpenIf,
-    Overwrite,
-    OverwriteIf,
-}
-impl CreateDisposition {
-    pub fn to_u32(self) -> u32 {
-        match self {
-            Self::Supersede => 0x00,
-            Self::Open => 0x01,
-            Self::Create => 0x02,
-            Self::OpenIf => 0x03,
-            Self::Overwrite => 0x04,
-            Self::OverwriteIf => 0x05,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct CreateResponse {
-    pub(crate) oplock_level: Option<OplockLevel202>,
-    pub(crate) create_action: CreateActionTaken,
-    pub(crate) creation_time: u64,
-    pub(crate) last_access_time: u64,
-    pub(crate) last_write_time: u64,
-    pub(crate) change_time: u64,
-    pub(crate) allocation_size: u64,
-    pub(crate) end_of_file: u64,
-    pub(crate) attributes: u32,
-    pub(crate) id: FileId,
-}
-impl CreateResponse {
-    const STRUCTURE_SIZE: u16 = 89;
-    pub(crate) fn read_from<R: Read>(r: &mut R) -> Result<Self, ReadError> {
-        if r.read_u16_le()? != Self::STRUCTURE_SIZE {
-            return Err(ReadError::InvalidStructureSize);
-        }
-        let mut oplock = 0;
-        r.read_exact(std::slice::from_mut(&mut oplock))?;
-        let oplock_level = match oplock {
-            0x00 => None,
-            0x01 => Some(OplockLevel202::II),
-            0x08 => Some(OplockLevel202::Exclusive),
-            0x09 => Some(OplockLevel202::Batch),
-            _ => return Err(ReadError::InvalidOplockLevel),
-        };
-        // flags
-        r.read_exact(&mut [0])?;
-        let create_action = match r.read_u32_le()? {
-            0x00 => CreateActionTaken::Superseded,
-            0x01 => CreateActionTaken::Opened,
-            0x02 => CreateActionTaken::Created,
-            0x03 => CreateActionTaken::Overwritten,
-            _ => return Err(ReadError::InvalidCreateAction),
-        };
-        let creation_time = r.read_u64_le()?;
-        let last_access_time = r.read_u64_le()?;
-        let last_write_time = r.read_u64_le()?;
-        let change_time = r.read_u64_le()?;
-        let allocation_size = r.read_u64_le()?;
-        let end_of_file = r.read_u64_le()?;
-        let attributes = r.read_u32_le()?;
-        let _ = r.read_u32_le()?;
-        let mut persistent = [0u8; 8];
-        r.read_exact(&mut persistent)?;
-        let mut volatile = [0u8; 8];
-        r.read_exact(&mut volatile)?;
-        let id = FileId {
-            persistent,
-            volatile,
-        };
-        let create_contexts_offset = r.read_u32_le()?;
-        let create_contexts_length = r.read_u32_le()?;
-        let mut _ctx = vec![0; (create_contexts_length + create_contexts_offset) as usize];
-        r.read_exact(&mut _ctx)?;
-        Ok(CreateResponse {
-            oplock_level,
-            create_action,
-            creation_time,
-            last_access_time,
-            last_write_time,
-            change_time,
-            allocation_size,
-            end_of_file,
-            attributes,
-            id,
-        })
-    }
-}
-#[derive(Debug)]
-pub(crate) enum ReadError {
-    Io(std::io::Error),
-    InvalidStructureSize,
-    InvalidOplockLevel,
-    InvalidCreateAction,
-}
-impl From<std::io::Error> for ReadError {
-    fn from(value: std::io::Error) -> Self {
-        Self::Io(value)
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum CreateActionTaken {
-    Superseded,
-    Opened,
-    Created,
-    Overwritten,
-}
-
 #[derive(Clone, Copy, Debug)]
 pub struct FileId {
-    persistent: [u8; 8],
-    volatile: [u8; 8],
+    pub(crate) persistent: [u8; 8],
+    pub(crate) volatile: [u8; 8],
+}
+impl From<[u8; 16]> for FileId {
+    fn from(value: [u8; 16]) -> Self {
+        let persistent = *value.first_chunk().unwrap();
+        let volatile = *value.last_chunk().unwrap();
+        Self { persistent, volatile }
+    }
 }

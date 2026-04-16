@@ -5,6 +5,7 @@ pub mod dir;
 mod error;
 pub mod file;
 mod header;
+mod ioctl;
 mod message;
 mod negotiate;
 mod netbios;

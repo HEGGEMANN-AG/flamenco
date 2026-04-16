@@ -3,8 +3,8 @@ use std::{num::NonZero, sync::Arc};
 use crate::{
     error::{ErrorResponse2, ServerError},
     file::{
-        self, AccessMask, CreateDisposition, CreateResponse, FileCreateRequest, ImpersonationLevel,
-        ShareAccess,
+        self, AccessMask, ImpersonationLevel, ShareAccess,
+        create::{CreateDisposition, CreateResponse, FileCreateRequest},
     },
     header::{Command202, SyncHeader202Outgoing},
     message,
@@ -28,10 +28,7 @@ pub(crate) async fn create_dir(
         path,
     };
     let session = tree_connection.session();
-    let key = session
-        .requires_signing()
-        .then_some(session.session_key())
-        .copied();
+    let key = session.requires_signing().then_some(session.session_key()).copied();
     let (header, body) = session
         .connection
         .signup_message(header, &request, false, key)
@@ -55,10 +52,10 @@ pub(crate) async fn create_dir(
         attributes,
         id,
     } = CreateResponse::read_from(&mut body.as_ref()).map_err(|err| match err {
-        file::ReadError::Io(error) => CreateDirError::Io(error),
-        file::ReadError::InvalidStructureSize
-        | file::ReadError::InvalidOplockLevel
-        | file::ReadError::InvalidCreateAction => CreateDirError::InvalidMessage,
+        file::create::ReadError::Io(error) => CreateDirError::Io(error),
+        file::create::ReadError::InvalidStructureSize
+        | file::create::ReadError::InvalidOplockLevel
+        | file::create::ReadError::InvalidCreateAction => CreateDirError::InvalidMessage,
     })?;
     Ok(())
 }
@@ -67,10 +64,7 @@ pub(crate) async fn create_dir(
 pub enum CreateDirError {
     InvalidMessage,
     Io(std::io::Error),
-    ServerError {
-        code: NonZero<u32>,
-        body: ErrorResponse2,
-    },
+    ServerError { code: NonZero<u32>, body: ErrorResponse2 },
 }
 impl From<std::io::Error> for CreateDirError {
     fn from(value: std::io::Error) -> Self {
