@@ -24,7 +24,7 @@ use crate::{
 
 pub use create::CreateDisposition;
 
-mod close;
+pub(crate) mod close;
 pub(crate) mod create;
 mod read;
 mod resume_key;
@@ -63,11 +63,11 @@ impl std::fmt::Debug for File {
 
 impl File {
     pub(crate) async fn new(
-        tree_connection: Arc<TreeConnection>,
+        tree_connection: &Arc<TreeConnection>,
         path: &str,
         create_disposition: CreateDisposition,
     ) -> Result<File, OpenError> {
-        let header = SyncHeader202Outgoing::from_tree_con(&tree_connection, Command202::Create);
+        let header = SyncHeader202Outgoing::from_tree_con(tree_connection, Command202::Create);
         let request_body = FileCreateRequest {
             oplock_level: None,
             impersonation_level: ImpersonationLevel::Impersonation,
@@ -112,7 +112,7 @@ impl File {
         Ok(File {
             oplock_level,
             offset: 0,
-            tree_connection,
+            tree_connection: tree_connection.clone(),
             id,
             allocation_size,
             end_of_file,
@@ -261,7 +261,7 @@ fn verify_read_header(header: &SyncHeader202Incoming) -> Result<(), ReadFileErro
     }
 }
 
-fn verify_close_header(header: &SyncHeader202Incoming) -> Result<(), ReadCloseError> {
+pub(crate) fn verify_close_header(header: &SyncHeader202Incoming) -> Result<(), ReadCloseError> {
     if header.command != Command202::Close || header.is_async() {
         Err(ReadCloseError::InvalidHeader)
     } else {

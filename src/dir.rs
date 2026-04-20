@@ -3,20 +3,34 @@ use std::{num::NonZero, sync::Arc};
 use crate::{
     error::{ErrorResponse2, ServerError},
     file::{
-        self, AccessMask, ImpersonationLevel, ShareAccess,
+        self, AccessMask, FileId, ImpersonationLevel, OplockLevel202, ShareAccess,
+        close::{CloseRequest, CloseResponse},
         create::{CreateDisposition, CreateResponse, FileCreateRequest},
+        verify_close_header,
     },
     header::{Command202, SyncHeader202Outgoing},
-    message,
+    message::{self, WriteError},
     tree::TreeConnection,
 };
 
-pub(crate) async fn create_dir(
+pub struct Directory {
     tree_connection: Arc<TreeConnection>,
+    id: FileId,
+    oplock_level: Option<OplockLevel202>,
+    allocation_size: u64,
+    end_of_file: u64,
+    creation_time: u64,
+    last_access_time: u64,
+    last_write_time: u64,
+    change_time: u64,
+}
+
+pub(crate) async fn open(
+    tree_connection: &Arc<TreeConnection>,
     path: &str,
     create_disposition: DirCreateDisposition,
-) -> Result<(), CreateDirError> {
-    let header = SyncHeader202Outgoing::from_tree_con(&tree_connection, Command202::Create);
+) -> Result<Directory, CreateDirError> {
+    let header = SyncHeader202Outgoing::from_tree_con(tree_connection, Command202::Create);
     let request = FileCreateRequest {
         oplock_level: None,
         impersonation_level: ImpersonationLevel::Impersonation,
@@ -57,7 +71,45 @@ pub(crate) async fn create_dir(
         | file::create::ReadError::InvalidOplockLevel
         | file::create::ReadError::InvalidCreateAction => CreateDirError::InvalidMessage,
     })?;
-    Ok(())
+    Ok(Directory {
+        tree_connection: tree_connection.clone(),
+        id,
+        oplock_level,
+        allocation_size,
+        end_of_file,
+        creation_time,
+        last_access_time,
+        last_write_time,
+        change_time,
+    })
+}
+impl Directory {
+    async fn send_close(&mut self) -> Result<(), std::io::Error> {
+        Self::send_close_raw(self.tree_connection.clone(), self.id).await
+    }
+    async fn send_close_raw(tree_connection: Arc<TreeConnection>, id: FileId) -> Result<(), std::io::Error> {
+        let header = SyncHeader202Outgoing::from_tree_con(&tree_connection, Command202::Close);
+        let session = tree_connection.session();
+        let session_key = session.requires_signing().then_some(session.session_key()).copied();
+        let (header, body) = match session
+            .connection
+            .signup_message(header, &CloseRequest { id }, false, session_key)
+            .await
+        {
+            Ok(t) => t,
+            Err(WriteError::Connection(io)) => return Err(io),
+            Err(WriteError::MessageTooLong) => unreachable!(),
+        };
+        if let Some(code) = NonZero::new(header.status) {
+            panic!("Error with code {code}");
+        }
+        let _ = verify_close_header(&header);
+        let _body = CloseResponse::read_from(&mut body.as_ref());
+        Ok(())
+    }
+    pub async fn close(mut self) -> Result<(), std::io::Error> {
+        self.send_close().await
+    }
 }
 
 #[derive(Debug)]

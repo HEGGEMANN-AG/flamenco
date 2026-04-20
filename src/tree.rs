@@ -7,7 +7,7 @@ use std::{
 
 use crate::{
     ReadIntLe,
-    dir::CreateDirError,
+    dir::{CreateDirError, DirCreateDisposition, Directory},
     error::{ErrorResponse2, ServerError},
     file::{File, OpenError, create::CreateDisposition},
     header::{Command202, SyncHeader202Incoming, SyncHeader202Outgoing},
@@ -75,14 +75,18 @@ impl TreeConnection {
         self.id
     }
     pub async fn open_file(
-        self: Arc<Self>,
+        self: &Arc<Self>,
         path: &str,
         create_disposition: CreateDisposition,
     ) -> Result<File, OpenError> {
         File::new(self, path, create_disposition).await
     }
-    pub async fn create_dir(self: Arc<Self>, path: &str) -> Result<(), CreateDirError> {
-        crate::dir::create_dir(self, path, crate::dir::DirCreateDisposition::Create).await
+    pub async fn open_directory(
+        self: &Arc<Self>,
+        path: &str,
+        create_disposition: DirCreateDisposition,
+    ) -> Result<Directory, CreateDirError> {
+        crate::dir::open(self, path, create_disposition).await
     }
 }
 

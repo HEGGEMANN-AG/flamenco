@@ -14,17 +14,14 @@ impl MessageBody for CloseRequest {
         w.extend_from_slice(&24u16.to_le_bytes());
         w.extend_from_slice(&0u16.to_le_bytes());
         w.extend_from_slice(&0u32.to_le_bytes());
-        let FileId {
-            persistent,
-            volatile,
-        } = self.id;
+        let FileId { persistent, volatile } = self.id;
         w.extend_from_slice(&persistent);
         w.extend_from_slice(&volatile);
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct CloseResponse {
+pub(crate) struct CloseResponse {
     pub creation_time: u64,
     pub last_access_time: u64,
     pub last_write_time: u64,
