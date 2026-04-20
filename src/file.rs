@@ -15,6 +15,7 @@ use crate::{
         close::{CloseRequest, CloseResponse, ReadCloseError},
         create::{CreateResponse, FileCreateRequest},
         read::{ReadFileError, ReadRequest, ReadResponse, ReadResponseError},
+        server_copy::{ServerCopyError, ServerCopyResponse},
     },
     header::{Command202, SyncHeader202Incoming, SyncHeader202Outgoing},
     ioctl::SourceKey,
@@ -189,7 +190,11 @@ impl File {
     pub async fn get_resume_key(&self) -> SourceKey {
         resume_key::get_resume_key(self).await
     }
-    pub async fn copy_to<R: server_copy::FileRange>(&self, to: &Self, chunks: &[server_copy::Chunk<R>]) {
+    pub async fn copy_to<R: server_copy::FileRange>(
+        &self,
+        to: &Self,
+        chunks: &[server_copy::Chunk<R>],
+    ) -> Result<ServerCopyResponse, ServerCopyError> {
         server_copy::server_copy(self, to, chunks).await
     }
 }
