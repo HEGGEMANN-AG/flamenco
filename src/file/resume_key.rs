@@ -25,7 +25,7 @@ pub(crate) async fn get_resume_key(file: &File) -> SourceKey {
     if let Some(status) = NonZero::new(header.status) {
         panic!("Server returned error code: {status}");
     }
-    let response = IoCtlResponse::read_from(Cursor::new(body));
+    let response = IoCtlResponse::read_from(Cursor::new(body)).unwrap();
     assert_eq!(response.code, ControlCode::SrvRequestResumeKey);
     let arr: &[u8; 24] = response.buffer.first_chunk().unwrap();
     SourceKey::new(*arr)
