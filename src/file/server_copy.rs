@@ -11,7 +11,7 @@ use crate::{
     error::{ErrorResponse2, ServerError},
     file::File,
     header::{Command202, SyncHeader202Outgoing},
-    ioctl::{Flags, IoCtlRequest, IoCtlRequestKind, IoCtlResponse},
+    ioctl::{Flags, IoCtlRequest, IoCtlRequestKind, IoCtlResponse, ReadError},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -64,7 +64,10 @@ pub(crate) async fn server_copy<T: FileRange>(
     if let Some(code) = NonZero::new(header.status) {
         return Err(ServerCopyError::handle_error_body(code, &body));
     }
-    let ioctl = IoCtlResponse::read_from(Cursor::new(body));
+    let ioctl = IoCtlResponse::read_from(Cursor::new(body)).map_err(|re| match re {
+        ReadError::InvalidStructureSize | ReadError::InvalidControlCode => ServerCopyError::InvalidMessage,
+        ReadError::Io(error) => ServerCopyError::Io(error),
+    })?;
     let mut server_copy_resp: &[u8] = &ioctl.buffer;
     let chunks_written = server_copy_resp.read_u32_le()?;
     let chunk_bytes_written = server_copy_resp.read_u32_le()?;

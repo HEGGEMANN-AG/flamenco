@@ -1,4 +1,5 @@
 use std::{
+    fmt::{Display, Formatter, Result as FmtResult},
     io::{Read, Seek},
     ops::RangeInclusive,
 };
@@ -192,40 +193,61 @@ pub(crate) struct IoCtlResponse {
 
 impl IoCtlResponse {
     const STRUCTURE_SIZE: u16 = 49;
-    pub fn read_from<R: Read + Seek>(mut r: R) -> Self {
-        if r.read_u16_le().unwrap() != Self::STRUCTURE_SIZE {
-            panic!("Invalid structure size");
+    pub fn read_from<R: Read + Seek>(mut r: R) -> Result<Self, ReadError> {
+        if r.read_u16_le()? != Self::STRUCTURE_SIZE {
+            return Err(ReadError::InvalidStructureSize);
         }
-        let _reserved = r.read_u16_le().unwrap();
-        let craw = r.read_u32_le().unwrap();
+        let _reserved = r.read_u16_le()?;
+        let craw = r.read_u32_le()?;
         let Some(code) = ControlCode::from_int(craw) else {
-            panic!("Invalid control code")
+            return Err(ReadError::InvalidControlCode);
         };
         let mut file_id = [0u8; 16];
-        r.read_exact(&mut file_id).unwrap();
+        r.read_exact(&mut file_id)?;
         let file_id = FileId::from(file_id);
-        let input_offset = r.read_u32_le().unwrap();
-        let input_count = r.read_u32_le().unwrap();
+        let input_offset = r.read_u32_le()?;
+        let input_count = r.read_u32_le()?;
         assert_eq!(input_count, 0);
-        let output_offset = r.read_u32_le().unwrap();
+        let output_offset = r.read_u32_le()?;
         assert_eq!(input_offset, output_offset);
-        let output_count = r.read_u32_le().unwrap();
-        let flags = r.read_u32_le().unwrap();
-        let _reserved2 = r.read_u32_le().unwrap();
+        let output_count = r.read_u32_le()?;
+        let flags = r.read_u32_le()?;
+        let _reserved2 = r.read_u32_le()?;
         let offset_from_end_of_buffer = (output_offset - 64 - 48) as usize;
-        r.seek_relative(offset_from_end_of_buffer as i64).unwrap();
+        r.seek_relative(offset_from_end_of_buffer as i64)?;
         let buffer = if output_count == 0 {
             Box::default()
         } else {
             let mut output = vec![0; output_count as usize];
-            r.read_exact(&mut output).unwrap();
+            r.read_exact(&mut output)?;
             output.into_boxed_slice()
         };
-        Self {
+        Ok(Self {
             code,
             file_id,
             flags,
             buffer,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub enum ReadError {
+    InvalidStructureSize,
+    InvalidControlCode,
+    Io(std::io::Error),
+}
+impl Display for ReadError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        match self {
+            Self::InvalidStructureSize => write!(f, "Invalid structure size field"),
+            Self::Io(io) => write!(f, "Error reading: {io}"),
+            Self::InvalidControlCode => write!(f, "Invalid control code"),
         }
+    }
+}
+impl From<std::io::Error> for ReadError {
+    fn from(value: std::io::Error) -> Self {
+        Self::Io(value)
     }
 }
