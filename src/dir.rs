@@ -137,8 +137,11 @@ impl ServerError for CreateDirError {
 /// Directories can only be opened with these three options
 pub enum DirCreateDisposition {
     #[default]
+    /// If the file already exists, return success; otherwise, fail the operation.
     Open,
+    /// If the file already exists, fail the operation; otherwise, create the file.
     Create,
+    /// Open the file if it already exists; otherwise, create the file.
     OpenIf,
 }
 
