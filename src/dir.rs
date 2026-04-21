@@ -34,7 +34,7 @@ pub(crate) async fn open(
     let request = FileCreateRequest {
         oplock_level: None,
         impersonation_level: ImpersonationLevel::Impersonation,
-        desired_access: AccessMask::READ_DATA,
+        desired_access: AccessMask::READ_DATA | AccessMask::READ_ATTRIBUTES,
         file_attributes: 0x0,
         share_access: ShareAccess::SHARE_READ,
         create_disposition: create_disposition.into(),
