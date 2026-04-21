@@ -12,6 +12,7 @@ use crate::{
     file::File,
     header::{Command202, SyncHeader202Outgoing},
     ioctl::{Flags, IoCtlRequest, IoCtlRequestKind, IoCtlResponse, ReadError},
+    message::WriteError,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -60,7 +61,10 @@ pub(crate) async fn server_copy<T: FileRange>(
         .connection
         .signup_message(out_header, &ioctl, false, session_key)
         .await
-        .unwrap();
+        .map_err(|we| match we {
+            WriteError::Connection(error) => ServerCopyError::Io(error),
+            WriteError::MessageTooLong => ServerCopyError::InvalidMessage,
+        })?;
     if let Some(code) = NonZero::new(header.status) {
         return Err(ServerCopyError::handle_error_body(code, &body));
     }
