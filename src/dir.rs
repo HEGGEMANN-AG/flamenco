@@ -13,6 +13,8 @@ use crate::{
     tree::TreeConnection,
 };
 
+pub mod query;
+
 pub struct Directory {
     tree_connection: Arc<TreeConnection>,
     id: FileId,
@@ -109,6 +111,9 @@ impl Directory {
     }
     pub async fn close(mut self) -> Result<(), std::io::Error> {
         self.send_close().await
+    }
+    pub async fn query<I: query::DirectoryInformation>(&self, search_pattern: &str) -> Box<[I]> {
+        query::query_directory(self, search_pattern).await
     }
 }
 

@@ -16,10 +16,17 @@ pub mod tree;
 
 pub const SMB_DEFAULT_PORT: u16 = 445;
 
+fn from_wide(arr: &[u8]) -> String {
+    assert!(arr.len().is_multiple_of(2));
+    arr.as_chunks::<2>()
+        .0
+        .iter()
+        .map(|twobytes| char::from_u32(u16::from_le_bytes(*twobytes).into()).unwrap())
+        .collect()
+}
+
 fn to_wide(s: &str) -> Vec<u8> {
-    s.encode_utf16()
-        .flat_map(|c| c.to_le_bytes())
-        .collect::<Vec<_>>()
+    s.encode_utf16().flat_map(|c| c.to_le_bytes()).collect::<Vec<_>>()
 }
 
 pub(crate) trait ReadIntLe: Read {
