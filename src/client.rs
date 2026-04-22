@@ -170,11 +170,9 @@ impl Connection {
         {
             return Err(ConnectError::MaxMessageSizeInsufficient);
         }
-        match neg_resp.dialect {
-            Dialect::SMB2020 => {}
-            Dialect::Wildcard => unimplemented!(),
-            _ => return Err(ConnectError::ServerChoseUnsupportedDialect),
-        }
+        let Dialect::SMB2020 = neg_resp.dialect else {
+            return Err(ConnectError::ServerChoseUnsupportedDialect);
+        };
         connection.requires_signing = neg_resp.security_mode == SecurityMode::SigningRequired;
         connection.max_read_size = neg_resp.max_read_size;
         connection.max_transaction_size = neg_resp.max_transact_size;
