@@ -21,6 +21,7 @@ use tokio::{
 };
 
 use kenobi::cred::{Credentials, Outbound};
+use uuid::Uuid;
 
 use crate::{
     client::message::IncomingMessage,
@@ -72,21 +73,12 @@ impl Client202 {
 pub(crate) type OutstandingRequests = HashMap<u64, Sender<(Arc<SyncHeader202Incoming>, Arc<[u8]>)>>;
 type OpenSessions = HashMap<NonZero<u64>, Weak<Session202>>;
 
-#[derive(Debug)]
-pub struct Connection {
-    pub(crate) client: Arc<Client202>,
-    outstanding_requests: Arc<Mutex<OutstandingRequests>>,
-    open_sessions: Arc<RwLock<OpenSessions>>,
-    message_id: AtomicU64,
-    write_tcp: Mutex<OwnedWriteHalf>,
-    max_transaction_size: u32,
-    max_read_size: u32,
-    max_write_size: u32,
-    /// What the server requires
-    requires_signing: bool,
-    shutdown_handle: Option<Sender<()>>,
+struct ConnectionHandle<'ch> {
+    write_tcp: &'ch Mutex<OwnedWriteHalf>,
+    message_id: &'ch AtomicU64,
+    outstanding_requests: &'ch Mutex<OutstandingRequests>,
 }
-impl Connection {
+impl<'ch> ConnectionHandle<'ch> {
     pub(crate) async fn signup_message(
         &self,
         mut header: SyncHeader202Outgoing,
@@ -101,6 +93,43 @@ impl Connection {
         self.outstanding_requests.lock().await.insert(next_message_id, sx);
         message::write_202_message(wtcp.deref_mut(), key, header, msg, add_null).await?;
         Ok(rx.await.expect("dropped sender?"))
+    }
+}
+
+#[derive(Debug)]
+pub struct Connection {
+    pub(crate) client: Arc<Client202>,
+    outstanding_requests: Arc<Mutex<OutstandingRequests>>,
+    open_sessions: Arc<RwLock<OpenSessions>>,
+    message_id: AtomicU64,
+    write_tcp: Mutex<OwnedWriteHalf>,
+    max_transaction_size: u32,
+    max_read_size: u32,
+    max_write_size: u32,
+    server_guid: Uuid,
+    supports_dfs: bool,
+    negotiate_time: u64,
+    server_start_time: u64,
+    /// What the server requires
+    requires_signing: bool,
+    shutdown_handle: Option<Sender<()>>,
+}
+impl Connection {
+    fn as_handle(&self) -> ConnectionHandle<'_> {
+        ConnectionHandle {
+            write_tcp: &self.write_tcp,
+            message_id: &self.message_id,
+            outstanding_requests: &self.outstanding_requests,
+        }
+    }
+    pub(crate) async fn signup_message(
+        &self,
+        header: SyncHeader202Outgoing,
+        msg: &impl MessageBody,
+        add_null: bool,
+        key: Option<[u8; 16]>,
+    ) -> Result<(Arc<SyncHeader202Incoming>, Arc<[u8]>), crate::message::WriteError> {
+        self.as_handle().signup_message(header, msg, add_null, key).await
     }
     pub(crate) async fn signup_session(&self, session_id: NonZero<u64>, session: Weak<Session202>) -> Result<(), ()> {
         let mut map = self.open_sessions.write().await;
@@ -120,6 +149,12 @@ impl Connection {
     }
     pub fn max_write_size(&self) -> u32 {
         self.max_write_size
+    }
+    pub fn supports_dfs(&self) -> bool {
+        self.supports_dfs
+    }
+    pub fn server_guid(&self) -> Uuid {
+        self.server_guid
     }
     pub fn server_requires_signing(&self) -> bool {
         self.requires_signing
@@ -141,21 +176,15 @@ impl Connection {
         let outstanding_requests: Arc<Mutex<OutstandingRequests>> = Arc::default();
         let open_sessions: Arc<RwLock<OpenSessions>> = Arc::default();
         let (shutdown_handle, shutdown_recv) = tokio::sync::oneshot::channel();
-        let mut connection = Connection {
-            client,
-            outstanding_requests: outstanding_requests.clone(),
-            open_sessions: open_sessions.clone(),
-            message_id,
-            write_tcp: Mutex::new(wtcp),
-            max_transaction_size: 0,
-            max_read_size: 0,
-            max_write_size: 0,
-            requires_signing: false,
-            shutdown_handle: Some(shutdown_handle),
+        let drive = Self::drive(open_sessions.clone(), outstanding_requests.clone(), rtcp, shutdown_recv);
+        let write_tcp = Mutex::new(wtcp);
+        let ch = ConnectionHandle {
+            write_tcp: &write_tcp,
+            message_id: &message_id,
+            outstanding_requests: &outstanding_requests,
         };
-        let drive = Self::drive(open_sessions, outstanding_requests, rtcp, shutdown_recv);
         tokio::spawn(drive);
-        let (header, body) = connection.signup_message(neg_header, &neg_req, false, None).await?;
+        let (header, body) = ch.signup_message(neg_header, &neg_req, false, None).await?;
         if header.command != Command202::Negotiate {
             return Err(ConnectError::InvalidMessage);
         }
@@ -163,20 +192,43 @@ impl Connection {
             return Err(ConnectError::handle_error_body(code, &body));
         }
         verify_negotiate_header(&header)?;
-        let neg_resp = NegotiateResponse::read_from(&mut Cursor::new(body))?;
-        if neg_resp.max_transact_size < MINIMUM_TRANSACT_SIZE
-            || neg_resp.max_read_size < MINIMUM_TRANSACT_SIZE
-            || neg_resp.max_write_size < MINIMUM_TRANSACT_SIZE
+        let NegotiateResponse {
+            security_mode,
+            dialect,
+            server_guid,
+            capabilities,
+            max_transact_size,
+            max_read_size,
+            max_write_size,
+            system_time,
+            server_start_time,
+            ..
+        } = NegotiateResponse::read_from(&mut Cursor::new(body))?;
+        if max_transact_size < MINIMUM_TRANSACT_SIZE
+            || max_read_size < MINIMUM_TRANSACT_SIZE
+            || max_write_size < MINIMUM_TRANSACT_SIZE
         {
             return Err(ConnectError::MaxMessageSizeInsufficient);
         }
-        let Dialect::SMB2020 = neg_resp.dialect else {
+        let Dialect::SMB2020 = dialect else {
             return Err(ConnectError::ServerChoseUnsupportedDialect);
         };
-        connection.requires_signing = neg_resp.security_mode == SecurityMode::SigningRequired;
-        connection.max_read_size = neg_resp.max_read_size;
-        connection.max_transaction_size = neg_resp.max_transact_size;
-        connection.max_write_size = neg_resp.max_write_size;
+        let connection = Connection {
+            client,
+            outstanding_requests,
+            open_sessions,
+            message_id,
+            write_tcp,
+            max_transaction_size: max_transact_size,
+            max_read_size,
+            max_write_size,
+            server_guid,
+            supports_dfs: capabilities & 0x01 != 0,
+            negotiate_time: system_time,
+            server_start_time,
+            requires_signing: security_mode == SecurityMode::SigningRequired,
+            shutdown_handle: Some(shutdown_handle),
+        };
         Ok(Arc::new(connection))
     }
     async fn drive(
