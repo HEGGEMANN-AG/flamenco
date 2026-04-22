@@ -64,10 +64,7 @@ impl Client202 {
             SecurityMode::SigningEnabled
         }
     }
-    pub async fn connect(
-        self: Arc<Self>,
-        addr: impl ToSocketAddrs,
-    ) -> Result<Arc<Connection>, ConnectError> {
+    pub async fn connect(self: Arc<Self>, addr: impl ToSocketAddrs) -> Result<Arc<Connection>, ConnectError> {
         Connection::new(self, addr).await
     }
 }
@@ -101,18 +98,11 @@ impl Connection {
         let next_message_id = self.message_id.fetch_add(1, Ordering::Relaxed);
         header.message_id = next_message_id;
         let (sx, rx) = tokio::sync::oneshot::channel();
-        self.outstanding_requests
-            .lock()
-            .await
-            .insert(next_message_id, sx);
+        self.outstanding_requests.lock().await.insert(next_message_id, sx);
         message::write_202_message(wtcp.deref_mut(), key, header, msg, add_null).await?;
         Ok(rx.await.expect("dropped sender?"))
     }
-    pub(crate) async fn signup_session(
-        &self,
-        session_id: NonZero<u64>,
-        session: Weak<Session202>,
-    ) -> Result<(), ()> {
+    pub(crate) async fn signup_session(&self, session_id: NonZero<u64>, session: Weak<Session202>) -> Result<(), ()> {
         let mut map = self.open_sessions.write().await;
         match map.insert(session_id, session) {
             Some(_) => Err(()),
@@ -141,14 +131,10 @@ impl Connection {
     ) -> Result<Arc<Session202>, SessionSetupError> {
         Session202::new(self, credentials, target_spn).await
     }
-    pub async fn new(
-        client: Arc<Client202>,
-        addr: impl ToSocketAddrs,
-    ) -> Result<Arc<Connection>, ConnectError> {
+    pub async fn new(client: Arc<Client202>, addr: impl ToSocketAddrs) -> Result<Arc<Connection>, ConnectError> {
         let (rtcp, wtcp) = TcpStream::connect(addr).await?.into_split();
         let neg_header = SyncHeader202Outgoing::default();
         let neg_req = NegotiateRequest202 {
-            capabilities: 0,
             security_mode: client.sent_security_mode(),
         };
         let message_id = AtomicU64::default();
@@ -169,9 +155,7 @@ impl Connection {
         };
         let drive = Self::drive(open_sessions, outstanding_requests, rtcp, shutdown_recv);
         tokio::spawn(drive);
-        let (header, body) = connection
-            .signup_message(neg_header, &neg_req, false, None)
-            .await?;
+        let (header, body) = connection.signup_message(neg_header, &neg_req, false, None).await?;
         if header.command != Command202::Negotiate {
             return Err(ConnectError::InvalidMessage);
         }
@@ -255,9 +239,7 @@ impl Connection {
 
                         // Validation passed
                         let message_id = header.message_id;
-                        let Some(message_sender) =
-                            outstanding_requests.lock().await.remove(&message_id)
-                        else {
+                        let Some(message_sender) = outstanding_requests.lock().await.remove(&message_id) else {
                             eprintln!("Message request not found");
                             continue;
                         };
@@ -281,12 +263,8 @@ impl Connection {
                         }
 
                         let message_id = header.message_id;
-                        let Some(message_sender) =
-                            outstanding_requests.lock().await.remove(&message_id)
-                        else {
-                            eprintln!(
-                                "No outstanding messager for out-of-session message id {message_id}"
-                            );
+                        let Some(message_sender) = outstanding_requests.lock().await.remove(&message_id) else {
+                            eprintln!("No outstanding messager for out-of-session message id {message_id}");
                             continue;
                         };
                         if message_sender.send((header, content)).is_err() {
@@ -325,10 +303,7 @@ pub enum ConnectError {
     InvalidMessage,
     MaxMessageSizeInsufficient,
     ServerChoseUnsupportedDialect,
-    ServerError {
-        code: NonZero<u32>,
-        body: ErrorResponse2,
-    },
+    ServerError { code: NonZero<u32>, body: ErrorResponse2 },
 }
 impl std::error::Error for ConnectError {
     fn cause(&self) -> Option<&dyn std::error::Error> {
@@ -381,9 +356,7 @@ impl From<ReadError> for ConnectError {
     fn from(value: ReadError) -> Self {
         match value {
             ReadError::Connection(io) => Self::Io(io),
-            ReadError::InvalidlySignedMessage | ReadError::InvalidNetbiosLength => {
-                Self::InvalidMessage
-            }
+            ReadError::InvalidlySignedMessage | ReadError::InvalidNetbiosLength => Self::InvalidMessage,
         }
     }
 }

@@ -7,7 +7,6 @@ use std::io::{Read, Seek, SeekFrom};
 #[derive(Debug)]
 pub struct NegotiateRequest202 {
     pub security_mode: SecurityMode,
-    pub capabilities: u32,
 }
 
 impl MessageBody for NegotiateRequest202 {
@@ -20,7 +19,7 @@ impl MessageBody for NegotiateRequest202 {
         w.extend_from_slice(&(self.security_mode as u16).to_le_bytes());
         // Reserved
         w.extend_from_slice(&0u16.to_le_bytes());
-        w.extend_from_slice(&self.capabilities.to_le_bytes());
+        w.extend_from_slice(&0u32.to_le_bytes());
         w.extend_from_slice(&[0u8; 16]);
         // client start time
         w.extend_from_slice(&0u64.to_le_bytes());
