@@ -1,6 +1,7 @@
 use std::{num::NonZero, sync::Arc};
 
 use crate::{
+    attributes::FileAttributes,
     error::{ErrorResponse2, ServerError},
     file::{
         self, AccessMask, FileId, ImpersonationLevel, OplockLevel202, ShareAccess,
@@ -37,7 +38,7 @@ pub(crate) async fn open(
         oplock_level: None,
         impersonation_level: ImpersonationLevel::Impersonation,
         desired_access: AccessMask::READ_DATA | AccessMask::READ_ATTRIBUTES,
-        file_attributes: 0x0,
+        file_attributes: FileAttributes::EMPTY,
         share_access: ShareAccess::SHARE_READ,
         create_disposition: create_disposition.into(),
         create_options: 0x1,
@@ -73,6 +74,9 @@ pub(crate) async fn open(
         | file::create::ReadError::InvalidOplockLevel
         | file::create::ReadError::InvalidCreateAction => CreateDirError::InvalidMessage,
     })?;
+    if !attributes.contains(FileAttributes::DIRECTORY) {
+        return Err(CreateDirError::NotADirectory);
+    }
     Ok(Directory {
         tree_connection: tree_connection.clone(),
         id,
@@ -120,6 +124,7 @@ impl Directory {
 #[derive(Debug)]
 pub enum CreateDirError {
     InvalidMessage,
+    NotADirectory,
     Io(std::io::Error),
     ServerError { code: NonZero<u32>, body: ErrorResponse2 },
 }

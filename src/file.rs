@@ -10,6 +10,7 @@ use std::{
 use tokio::io::{AsyncRead, AsyncSeek, ReadBuf};
 
 use crate::{
+    attributes::FileAttributes,
     error::{ErrorResponse2, ServerError},
     file::{
         close::{CloseRequest, CloseResponse, ReadCloseError},
@@ -77,7 +78,7 @@ impl File {
                 | AccessMask::READ_ATTRIBUTES
                 | AccessMask::READ_EA
                 | AccessMask::READ_CONTROL,
-            file_attributes: 0x0,
+            file_attributes: FileAttributes::EMPTY,
             create_options: 0x40 | 0x200,
             share_access: ShareAccess::SHARE_READ | ShareAccess::SHARE_WRITE,
             create_disposition,
@@ -110,6 +111,9 @@ impl File {
             attributes,
             id,
         } = CreateResponse::read_from(&mut body.as_ref()).unwrap();
+        if attributes.contains(FileAttributes::DIRECTORY) {
+            return Err(OpenError::IsADirectory);
+        }
         Ok(File {
             oplock_level,
             offset: 0,
@@ -276,6 +280,7 @@ pub(crate) fn verify_close_header(header: &SyncHeader202Incoming) -> Result<(), 
 
 #[derive(Debug)]
 pub enum OpenError {
+    IsADirectory,
     Io(std::io::Error),
     InvalidMessage,
     ServerError { code: NonZero<u32>, body: ErrorResponse2 },

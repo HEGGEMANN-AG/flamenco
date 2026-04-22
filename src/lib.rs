@@ -1,5 +1,6 @@
 use std::io::Read;
 
+mod attributes;
 pub mod client;
 pub mod dir;
 mod error;

@@ -2,6 +2,7 @@ use std::io::Read;
 
 use crate::{
     ReadIntLe,
+    attributes::FileAttributes,
     file::{AccessMask, FileId, ImpersonationLevel, OplockLevel202, ShareAccess},
     message::MessageBody,
 };
@@ -11,7 +12,7 @@ pub(crate) struct FileCreateRequest<'p> {
     pub(crate) oplock_level: Option<OplockLevel202>,
     pub(crate) impersonation_level: ImpersonationLevel,
     pub(crate) desired_access: AccessMask,
-    pub(crate) file_attributes: u32,
+    pub(crate) file_attributes: FileAttributes,
     pub(crate) share_access: ShareAccess,
     pub(crate) create_disposition: CreateDisposition,
     pub(crate) create_options: u32,
@@ -41,7 +42,7 @@ impl MessageBody for FileCreateRequest<'_> {
         w.extend_from_slice(&0u64.to_le_bytes());
         w.extend_from_slice(&0u64.to_le_bytes());
         w.extend_from_slice(&self.desired_access.0.to_le_bytes());
-        w.extend_from_slice(&self.file_attributes.to_le_bytes());
+        w.extend_from_slice(&self.file_attributes.to_int().to_le_bytes());
         w.extend_from_slice(&self.share_access.0.to_le_bytes());
         w.extend_from_slice(&self.create_disposition.to_u32().to_le_bytes());
         // TODO create options
@@ -67,7 +68,7 @@ pub(crate) struct CreateResponse {
     pub(crate) change_time: u64,
     pub(crate) allocation_size: u64,
     pub(crate) end_of_file: u64,
-    pub(crate) attributes: u32,
+    pub(crate) attributes: FileAttributes,
     pub(crate) id: FileId,
 }
 impl CreateResponse {
@@ -100,7 +101,7 @@ impl CreateResponse {
         let change_time = r.read_u64_le()?;
         let allocation_size = r.read_u64_le()?;
         let end_of_file = r.read_u64_le()?;
-        let attributes = r.read_u32_le()?;
+        let attributes = FileAttributes::from_int(r.read_u32_le()?);
         let _ = r.read_u32_le()?;
         let mut persistent = [0u8; 8];
         r.read_exact(&mut persistent)?;
