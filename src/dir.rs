@@ -1,5 +1,8 @@
 use std::{num::NonZero, sync::Arc};
 
+#[cfg(feature = "chrono")]
+use chrono::{DateTime, Utc};
+
 use crate::{
     attributes::FileAttributes,
     error::{ErrorResponse2, ServerError},
@@ -120,6 +123,22 @@ impl Directory {
     }
     pub async fn query<I: query::DirectoryInformation>(&self, search_pattern: &str) -> Box<[I]> {
         query::query_directory(self, search_pattern).await
+    }
+    #[cfg(feature = "chrono")]
+    pub fn creation_time(&self) -> DateTime<Utc> {
+        crate::chrono_from_filetime(self.creation_time)
+    }
+    #[cfg(feature = "chrono")]
+    pub fn last_access_time(&self) -> DateTime<Utc> {
+        crate::chrono_from_filetime(self.last_access_time)
+    }
+    #[cfg(feature = "chrono")]
+    pub fn last_write_time(&self) -> DateTime<Utc> {
+        crate::chrono_from_filetime(self.last_write_time)
+    }
+    #[cfg(feature = "chrono")]
+    pub fn change_time(&self) -> DateTime<Utc> {
+        crate::chrono_from_filetime(self.change_time)
     }
 }
 
