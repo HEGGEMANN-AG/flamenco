@@ -6,7 +6,7 @@ use std::{
 };
 
 use kenobi::{
-    client::{ClientBuilder, StepOut},
+    client::{ClientBuilder, InitializeError, StepOut},
     cred::{Credentials, Outbound},
 };
 
@@ -55,7 +55,7 @@ impl Session202 {
         let mut auth_context = match ClientBuilder::new_from_credentials(cred, target_spn)
             .request_delegation()
             .initialize()
-            .unwrap()
+            .map_err(SessionSetupError::InitializeSecurityContext)?
         {
             StepOut::Pending(pending) => pending,
             StepOut::Finished(_c) => unreachable!(),
@@ -82,9 +82,7 @@ impl Session202 {
                 previous_session_id: 0,
                 buffer: auth_context.next_token(),
             };
-            let (header, body) = connection
-                .signup_message(header, &body, false, None)
-                .await?;
+            let (header, body) = connection.signup_message(header, &body, false, None).await?;
             // Lookup session ID
             if let Some(code) = NonZero::new(header.status)
                 && code.get() != ERROR_MORE_PROCESSING_REQUIRED
@@ -92,10 +90,12 @@ impl Session202 {
                 return Err(SessionSetupError::handle_error_body(code, &body));
             }
             verify_session_setup_header(&header)?;
-            let SessionSetupResponse { flags, sec_buffer } =
-                SessionSetupResponse::read_from(Cursor::new(body))?;
+            let SessionSetupResponse { flags, sec_buffer } = SessionSetupResponse::read_from(Cursor::new(body))?;
 
-            auth_context = match auth_context.step(&sec_buffer).unwrap() {
+            auth_context = match auth_context
+                .step(&sec_buffer)
+                .map_err(SessionSetupError::InitializeSecurityContext)?
+            {
                 StepOut::Pending(p) => p,
                 StepOut::Finished(context) => {
                     let session_key = *context
@@ -114,9 +114,7 @@ impl Session202 {
                         }
                     }
                     let requires_signing = match flags {
-                        SessionFlags::None => {
-                            connection.server_requires_signing() || client.requires_signing
-                        }
+                        SessionFlags::None => connection.server_requires_signing() || client.requires_signing,
                         SessionFlags::Guest => client.requires_signing,
                         SessionFlags::Anonymous => false,
                     };
@@ -128,10 +126,11 @@ impl Session202 {
                         requires_signing,
                         id,
                         session_key,
-                        connection: connection.clone(),
+                        connection,
                     };
                     let as_arc = Arc::new(session);
-                    connection
+                    as_arc
+                        .connection
                         .signup_session(id, Arc::downgrade(&as_arc))
                         .await
                         .unwrap();
@@ -141,10 +140,7 @@ impl Session202 {
             session_id = header.session_id;
         }
     }
-    pub async fn tree_connect(
-        self: Arc<Self>,
-        share_path: &str,
-    ) -> Result<Arc<TreeConnection>, TreeConnectError> {
+    pub async fn tree_connect(self: Arc<Self>, share_path: &str) -> Result<Arc<TreeConnection>, TreeConnectError> {
         TreeConnection::new(self, share_path).await
     }
     pub async fn logoff(self) {
@@ -193,14 +189,12 @@ enum LogoffError {
 #[derive(Debug)]
 pub enum SessionSetupError {
     Io(std::io::Error),
+    InitializeSecurityContext(InitializeError),
     DisallowedGuestAccess,
     AuthContextTokenTooLong,
     SessionKeyTooShort,
     InvalidMessage,
-    ServerError {
-        code: NonZero<u32>,
-        body: ErrorResponse2,
-    },
+    ServerError { code: NonZero<u32>, body: ErrorResponse2 },
 }
 impl From<MsgWriteError> for SessionSetupError {
     fn from(value: MsgWriteError) -> Self {
@@ -213,9 +207,7 @@ impl From<MsgWriteError> for SessionSetupError {
 impl From<MsgReadError> for SessionSetupError {
     fn from(value: MsgReadError) -> Self {
         match value {
-            MsgReadError::InvalidlySignedMessage | MsgReadError::InvalidNetbiosLength => {
-                Self::InvalidMessage
-            }
+            MsgReadError::InvalidlySignedMessage | MsgReadError::InvalidNetbiosLength => Self::InvalidMessage,
             MsgReadError::Connection(io) => Self::Io(io),
         }
     }
