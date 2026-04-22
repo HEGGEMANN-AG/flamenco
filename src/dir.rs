@@ -6,7 +6,7 @@ use crate::{
     file::{
         self, AccessMask, FileId, ImpersonationLevel, OplockLevel202, ShareAccess,
         close::{CloseRequest, CloseResponse},
-        create::{CreateDisposition, CreateResponse, FileCreateRequest},
+        create::{CreateActionTaken, CreateDisposition, CreateResponse, FileCreateRequest},
         verify_close_header,
     },
     header::{Command202, SyncHeader202Outgoing},
@@ -32,7 +32,7 @@ pub(crate) async fn open(
     tree_connection: &Arc<TreeConnection>,
     path: &str,
     create_disposition: DirCreateDisposition,
-) -> Result<Directory, CreateDirError> {
+) -> Result<(Directory, CreateActionTaken), CreateDirError> {
     let header = SyncHeader202Outgoing::from_tree_con(tree_connection, Command202::Create);
     let request = FileCreateRequest {
         oplock_level: None,
@@ -77,8 +77,9 @@ pub(crate) async fn open(
     if !attributes.contains(FileAttributes::DIRECTORY) {
         return Err(CreateDirError::NotADirectory);
     }
-    Ok(Directory {
-        tree_connection: tree_connection.clone(),
+    let tree_connection = tree_connection.clone();
+    let dir = Directory {
+        tree_connection,
         id,
         oplock_level,
         allocation_size,
@@ -87,7 +88,8 @@ pub(crate) async fn open(
         last_access_time,
         last_write_time,
         change_time,
-    })
+    };
+    Ok((dir, create_action))
 }
 impl Directory {
     async fn send_close(&mut self) -> Result<(), std::io::Error> {

@@ -88,7 +88,7 @@ impl TreeConnection {
         self: &Arc<Self>,
         path: &str,
         create_disposition: DirCreateDisposition,
-    ) -> Result<Directory, CreateDirError> {
+    ) -> Result<(Directory, CreateActionTaken), CreateDirError> {
         crate::dir::open(self, path, create_disposition).await
     }
 }

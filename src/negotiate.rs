@@ -52,8 +52,7 @@ impl NegotiateResponse {
             return Err(NegotiateError::InvalidSize);
         }
         let security_mode = SecurityMode::from_value(r.read_u16_le()?);
-        let dialect =
-            Dialect::from_value(r.read_u16_le()?).ok_or(NegotiateError::InvalidDialect)?;
+        let dialect = Dialect::from_value(r.read_u16_le()?).ok_or(NegotiateError::InvalidDialect)?;
         // skip reserved
         r.seek(SeekFrom::Current(2))?;
         let mut server_guid = [0u8; 16];
