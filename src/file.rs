@@ -204,17 +204,29 @@ impl File {
     ) -> Result<ServerCopyResponse, ServerCopyError> {
         server_copy::server_copy(self, to, chunks).await
     }
+    pub fn creation_time_raw(&self) -> u64 {
+        self.creation_time
+    }
     #[cfg(feature = "chrono")]
     pub fn creation_time(&self) -> DateTime<Utc> {
         crate::chrono_from_filetime(self.creation_time)
+    }
+    pub fn last_access_time_raw(&self) -> u64 {
+        self.last_access_time
     }
     #[cfg(feature = "chrono")]
     pub fn last_access_time(&self) -> DateTime<Utc> {
         crate::chrono_from_filetime(self.last_access_time)
     }
+    pub fn last_write_time_raw(&self) -> u64 {
+        self.last_write_time
+    }
     #[cfg(feature = "chrono")]
     pub fn last_write_time(&self) -> DateTime<Utc> {
         crate::chrono_from_filetime(self.last_write_time)
+    }
+    pub fn change_time_raw(&self) -> u64 {
+        self.change_time
     }
     #[cfg(feature = "chrono")]
     pub fn change_time(&self) -> DateTime<Utc> {

@@ -158,9 +158,15 @@ impl Connection {
     pub fn server_guid(&self) -> Uuid {
         self.server_guid
     }
+    pub fn negotiate_time_raw(&self) -> u64 {
+        self.negotiate_time
+    }
     #[cfg(feature = "chrono")]
     pub fn negotiate_time(&self) -> DateTime<Utc> {
         crate::chrono_from_filetime(self.negotiate_time)
+    }
+    pub fn server_start_time_raw(&self) -> u64 {
+        self.server_start_time
     }
     #[cfg(feature = "chrono")]
     pub fn server_start_time(&self) -> DateTime<Utc> {
