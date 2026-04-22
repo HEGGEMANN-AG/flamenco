@@ -17,6 +17,7 @@ tokio = { version = "1.50.0", features = [
     "rt",
     "sync",
 ] }
+chrono = { version = "0.4.44", optional = true, default-features = false, features = ["std"] }
 
 [dev-dependencies]
 tokio = { version = "1.50.0", features = [
@@ -27,3 +28,6 @@ tokio = { version = "1.50.0", features = [
     "rt-multi-thread",
     "sync",
 ] }
+
+[features]
+chrono = ["dep:chrono"]

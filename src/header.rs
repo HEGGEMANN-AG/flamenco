@@ -22,11 +22,7 @@ impl SyncHeader202Outgoing {
         Self {
             command,
             credits: 0,
-            flags: if session.requires_signing() {
-                FLAG_SIGNED
-            } else {
-                0
-            },
+            flags: if session.requires_signing() { FLAG_SIGNED } else { 0 },
             next_command: None,
             message_id: 0,
             tree_id: None,

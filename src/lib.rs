@@ -1,5 +1,8 @@
 use std::io::Read;
 
+#[cfg(feature = "chrono")]
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, Utc};
+
 mod attributes;
 pub mod client;
 pub mod dir;
@@ -48,3 +51,14 @@ pub(crate) trait ReadIntLe: Read {
     }
 }
 impl<R: Read> ReadIntLe for R {}
+
+#[cfg(feature = "chrono")]
+const JANUARY_FIRST_1601: NaiveDate = NaiveDate::from_ymd_opt(1601, 1, 1).unwrap();
+
+#[cfg(feature = "chrono")]
+fn chrono_from_filetime(u: u64) -> DateTime<Utc> {
+    NaiveDateTime::new(JANUARY_FIRST_1601, NaiveTime::default())
+        .and_utc()
+        .checked_add_signed(TimeDelta::nanoseconds((u * 100).try_into().unwrap()))
+        .unwrap()
+}

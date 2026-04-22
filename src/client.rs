@@ -1,3 +1,5 @@
+#[cfg(feature = "chrono")]
+use chrono::{DateTime, Utc};
 use std::{
     collections::HashMap,
     fmt::Display,
@@ -155,6 +157,14 @@ impl Connection {
     }
     pub fn server_guid(&self) -> Uuid {
         self.server_guid
+    }
+    #[cfg(feature = "chrono")]
+    pub fn negotiate_time(&self) -> DateTime<Utc> {
+        crate::chrono_from_filetime(self.negotiate_time)
+    }
+    #[cfg(feature = "chrono")]
+    pub fn server_start_time(&self) -> DateTime<Utc> {
+        crate::chrono_from_filetime(self.server_start_time)
     }
     pub fn server_requires_signing(&self) -> bool {
         self.requires_signing
