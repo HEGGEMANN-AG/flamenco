@@ -14,7 +14,7 @@ use crate::{
     error::{ErrorResponse2, ServerError},
     file::{
         close::{CloseRequest, CloseResponse, ReadCloseError},
-        create::{CreateResponse, FileCreateRequest},
+        create::{CreateActionTaken, CreateResponse, FileCreateRequest},
         read::{ReadFileError, ReadRequest, ReadResponse, ReadResponseError},
         server_copy::{ServerCopyError, ServerCopyResponse},
     },
@@ -27,7 +27,7 @@ use crate::{
 pub use create::CreateDisposition;
 
 pub(crate) mod close;
-pub(crate) mod create;
+pub mod create;
 mod read;
 mod resume_key;
 pub mod server_copy;
@@ -68,7 +68,7 @@ impl File {
         tree_connection: &Arc<TreeConnection>,
         path: &str,
         create_disposition: CreateDisposition,
-    ) -> Result<File, OpenError> {
+    ) -> Result<(File, CreateActionTaken), OpenError> {
         let header = SyncHeader202Outgoing::from_tree_con(tree_connection, Command202::Create);
         let request_body = FileCreateRequest {
             oplock_level: None,
@@ -114,7 +114,7 @@ impl File {
         if attributes.contains(FileAttributes::DIRECTORY) {
             return Err(OpenError::IsADirectory);
         }
-        Ok(File {
+        let file = File {
             oplock_level,
             offset: 0,
             tree_connection: tree_connection.clone(),
@@ -126,7 +126,8 @@ impl File {
             last_write_time,
             change_time,
             future: None,
-        })
+        };
+        Ok((file, create_action))
     }
     pub fn length(&self) -> u64 {
         self.end_of_file

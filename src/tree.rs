@@ -9,7 +9,10 @@ use crate::{
     ReadIntLe,
     dir::{CreateDirError, DirCreateDisposition, Directory},
     error::{ErrorResponse2, ServerError},
-    file::{File, OpenError, create::CreateDisposition},
+    file::{
+        File, OpenError,
+        create::{CreateActionTaken, CreateDisposition},
+    },
     header::{Command202, SyncHeader202Incoming, SyncHeader202Outgoing},
     message::{MessageBody, ReadError as MsgReadError, WriteError as MsgWriteError},
     session::Session202,
@@ -78,7 +81,7 @@ impl TreeConnection {
         self: &Arc<Self>,
         path: &str,
         create_disposition: CreateDisposition,
-    ) -> Result<File, OpenError> {
+    ) -> Result<(File, CreateActionTaken), OpenError> {
         File::new(self, path, create_disposition).await
     }
     pub async fn open_directory(

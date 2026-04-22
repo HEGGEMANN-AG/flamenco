@@ -21,7 +21,8 @@ async fn main() {
         .clone()
         .open_file(&file_path, CreateDisposition::default())
         .await
-        .unwrap();
+        .unwrap()
+        .0;
     eprintln!("Opened file");
     let mut s = String::new();
     file.read_to_string(&mut s).await.unwrap();

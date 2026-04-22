@@ -169,7 +169,7 @@ impl CreateDisposition {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum CreateActionTaken {
+pub enum CreateActionTaken {
     Superseded,
     Opened,
     Created,
