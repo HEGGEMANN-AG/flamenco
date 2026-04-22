@@ -32,7 +32,7 @@ mod read;
 mod resume_key;
 pub mod server_copy;
 
-type ReadFuture = Pin<Box<dyn Future<Output = Result<Box<[u8]>, ReadFileError>> + Send + 'static>>;
+type ReadFuture = Pin<Box<dyn Future<Output = Result<Box<[u8]>, ReadFileError>> + Sync + Send + 'static>>;
 pub struct File {
     tree_connection: Arc<TreeConnection>,
     id: FileId,
