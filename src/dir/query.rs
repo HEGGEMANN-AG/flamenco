@@ -13,7 +13,19 @@ use crate::{
     tree::Tree,
 };
 
-pub async fn query_directory<I: DirectoryInformation>(dir: &Directory, search_pattern: &str) -> Box<[I]> {
+mod both_directory_information;
+mod directory_information;
+mod full_directory_information;
+mod id_full_directory_information;
+mod names_information;
+
+pub use both_directory_information::BothDirectoryInformation;
+pub use directory_information::DirectoryInformation;
+pub use full_directory_information::FullDirectoryInformation;
+pub use id_full_directory_information::IdFullDirectoryInformation;
+pub use names_information::NamesInformation;
+
+pub async fn query_directory<I: QueryInformation>(dir: &Directory, search_pattern: &str) -> Box<[I]> {
     let header = SyncHeader202Outgoing::from_tree_con(dir.tree_connection.as_ref(), Command202::QueryDirectory);
     let output_buffer_length = dir.tree_connection.session().connection.max_transaction_size();
     let request = QueryDirectoryRequest {
@@ -131,7 +143,7 @@ struct QueryDirectoryResponse<I>(Box<[I]>);
 impl<I> QueryDirectoryResponse<I> {
     const STRUCTURE_SIZE: u16 = 9;
 }
-impl<I: DirectoryInformation> QueryDirectoryResponse<I> {
+impl<I: QueryInformation> QueryDirectoryResponse<I> {
     fn read_from<R: Read + Seek>(r: &mut R, max_output_buffer_length: u32) -> Self {
         if r.read_u16_le().unwrap() != Self::STRUCTURE_SIZE {
             panic!("Bad structure size");
@@ -155,57 +167,7 @@ impl<I: DirectoryInformation> QueryDirectoryResponse<I> {
     }
 }
 
-pub trait DirectoryInformation: Sized {
+pub trait QueryInformation: Sized {
     fn class() -> DirectoryInformationClass;
     fn read_from_buffer<R: Read + Seek>(r: &mut R) -> Result<(Self, bool), std::io::Error>;
-}
-
-#[derive(Clone, Debug)]
-pub struct FileDirectoryInformation {
-    pub file_index: u32,
-    pub creation_time: u64,
-    pub last_access_time: u64,
-    pub last_write_time: u64,
-    pub change_time: u64,
-    pub end_of_file: u64,
-    pub allocation_size: u64,
-    pub file_attributes: u32,
-    pub file_name: Box<str>,
-}
-impl DirectoryInformation for FileDirectoryInformation {
-    fn class() -> DirectoryInformationClass {
-        DirectoryInformationClass::Directory
-    }
-    fn read_from_buffer<R: Read + Seek>(r: &mut R) -> Result<(Self, bool), std::io::Error> {
-        let next_entry_offset = r.read_u32_le()?;
-        let file_index = r.read_u32_le()?;
-        let creation_time = r.read_u64_le()?;
-        let last_access_time = r.read_u64_le()?;
-        let last_write_time = r.read_u64_le()?;
-        let change_time = r.read_u64_le()?;
-        let end_of_file = r.read_u64_le()?;
-        let allocation_size = r.read_u64_le()?;
-        let file_attributes = r.read_u32_le()?;
-        let file_name_length = r.read_u32_le()?;
-        let mut name_bytes = vec![0; file_name_length as usize];
-        r.read_exact(&mut name_bytes)?;
-        let file_name: Box<str> = crate::from_wide(&name_bytes).into_boxed_str();
-        let returned = Self {
-            file_index,
-            creation_time,
-            last_access_time,
-            last_write_time,
-            change_time,
-            end_of_file,
-            allocation_size,
-            file_attributes,
-            file_name,
-        };
-        if next_entry_offset == 0 {
-            Ok((returned, true))
-        } else {
-            r.seek_relative((next_entry_offset - 64 - file_name_length).into())?;
-            Ok((returned, false))
-        }
-    }
 }

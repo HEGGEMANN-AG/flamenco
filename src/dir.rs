@@ -121,7 +121,7 @@ impl Directory {
     pub async fn close(mut self) -> Result<(), std::io::Error> {
         self.send_close().await
     }
-    pub async fn query<I: query::DirectoryInformation>(&self, search_pattern: &str) -> Box<[I]> {
+    pub async fn query<I: query::QueryInformation>(&self, search_pattern: &str) -> Box<[I]> {
         query::query_directory(self, search_pattern).await
     }
     pub fn creation_time_raw(&self) -> u64 {

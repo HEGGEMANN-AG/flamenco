@@ -410,3 +410,6 @@ impl From<[u8; 16]> for FileId {
         Self { persistent, volatile }
     }
 }
+
+#[derive(Clone, Copy, Debug)]
+pub struct ShortFileId(pub NonZero<u64>);
