@@ -10,10 +10,11 @@ use crate::{
     file::FileId,
     header::{Command202, SyncHeader202Outgoing},
     message::MessageBody,
+    tree::Tree,
 };
 
 pub async fn query_directory<I: DirectoryInformation>(dir: &Directory, search_pattern: &str) -> Box<[I]> {
-    let header = SyncHeader202Outgoing::from_tree_con(&dir.tree_connection, Command202::QueryDirectory);
+    let header = SyncHeader202Outgoing::from_tree_con(dir.tree_connection.as_ref(), Command202::QueryDirectory);
     let output_buffer_length = dir.tree_connection.session().connection.max_transaction_size();
     let request = QueryDirectoryRequest {
         information_class: I::class(),

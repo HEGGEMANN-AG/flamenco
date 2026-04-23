@@ -23,7 +23,7 @@ use crate::{
     header::{Command202, SyncHeader202Incoming, SyncHeader202Outgoing},
     ioctl::SourceKey,
     message::WriteError,
-    tree::TreeConnection,
+    tree::{DiskTreeConnection, Tree},
 };
 
 pub use create::CreateDisposition;
@@ -36,7 +36,7 @@ pub mod server_copy;
 
 type ReadFuture = Pin<Box<dyn Future<Output = Result<Box<[u8]>, ReadFileError>> + Sync + Send + 'static>>;
 pub struct File {
-    tree_connection: Arc<TreeConnection>,
+    tree_connection: Arc<DiskTreeConnection>,
     id: FileId,
     oplock_level: Option<OplockLevel202>,
     offset: u64,
@@ -67,11 +67,11 @@ impl std::fmt::Debug for File {
 
 impl File {
     pub(crate) async fn new(
-        tree_connection: &Arc<TreeConnection>,
+        tree_connection: &Arc<DiskTreeConnection>,
         path: &str,
         create_disposition: CreateDisposition,
     ) -> Result<(File, CreateActionTaken), OpenError> {
-        let header = SyncHeader202Outgoing::from_tree_con(tree_connection, Command202::Create);
+        let header = SyncHeader202Outgoing::from_tree_con(tree_connection.as_ref(), Command202::Create);
         let request_body = FileCreateRequest {
             oplock_level: None,
             impersonation_level: ImpersonationLevel::Impersonation,
@@ -135,13 +135,13 @@ impl File {
         self.end_of_file
     }
     pub async fn read_raw(
-        tree_connection: Arc<TreeConnection>,
+        tree_connection: Arc<DiskTreeConnection>,
         id: FileId,
         offset: u64,
         length: u32,
         minimum_count: u32,
     ) -> Result<Box<[u8]>, ReadFileError> {
-        let header = SyncHeader202Outgoing::from_tree_con(&tree_connection, Command202::Read);
+        let header = SyncHeader202Outgoing::from_tree_con(tree_connection.as_ref(), Command202::Read);
         let session = tree_connection.session();
         let key = session.requires_signing().then_some(session.session_key()).copied();
         let req = ReadRequest {
@@ -171,8 +171,8 @@ impl File {
     async fn send_close(&mut self) -> Result<(), std::io::Error> {
         Self::send_close_raw(self.tree_connection.clone(), self.id).await
     }
-    async fn send_close_raw(tree_connection: Arc<TreeConnection>, id: FileId) -> Result<(), std::io::Error> {
-        let header = SyncHeader202Outgoing::from_tree_con(&tree_connection, Command202::Close);
+    async fn send_close_raw(tree_connection: Arc<DiskTreeConnection>, id: FileId) -> Result<(), std::io::Error> {
+        let header = SyncHeader202Outgoing::from_tree_con(tree_connection.as_ref(), Command202::Close);
         let session = tree_connection.session();
         let session_key = session.requires_signing().then_some(session.session_key()).copied();
         let (header, body) = match session

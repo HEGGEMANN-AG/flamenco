@@ -13,6 +13,7 @@ use crate::{
     header::{Command202, SyncHeader202Outgoing},
     ioctl::{Flags, IoCtlRequest, IoCtlRequestKind, IoCtlResponse, ReadError},
     message::WriteError,
+    tree::Tree,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -39,7 +40,7 @@ pub(crate) async fn server_copy<T: FileRange>(
     }
     let tc = &from.tree_connection;
     let source_key = from.get_resume_key().await;
-    let out_header = SyncHeader202Outgoing::from_tree_con(tc, Command202::IoCtl);
+    let out_header = SyncHeader202Outgoing::from_tree_con(tc.as_ref(), Command202::IoCtl);
     let session_key = tc
         .session()
         .requires_signing()

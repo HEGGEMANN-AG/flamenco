@@ -1,5 +1,4 @@
 use std::{
-    borrow::Borrow,
     io::{Cursor, Read, Seek, SeekFrom},
     num::NonZero,
     sync::Arc,
@@ -18,6 +17,14 @@ use crate::{
     session::Session202,
     share_name::{InvalidShareName, ShareName},
 };
+
+#[derive(Debug)]
+pub struct DiskTreeConnection {
+    session: Arc<Session202>,
+    /// There are no valid flags in 202 besides the SMB2_SHARE_CAP_DFS
+    dfs_capability: bool,
+    id: NonZero<u32>,
+}
 
 #[derive(Debug)]
 pub struct TreeConnection {
@@ -55,28 +62,35 @@ impl TreeConnection {
         };
         Ok(Arc::new(tree))
     }
-    pub async fn disconnect(self) {
-        let session = self.session.clone();
-        let key = session.requires_signing().then_some(*session.session_key());
-        let header = SyncHeader202Outgoing::from_tree_con(&self, Command202::TreeDisconnect);
-        let Ok((header, body)) = session
-            .connection
-            .signup_message(header, &TreeDisconnectRequest, false, key)
-            .await
-        else {
-            return;
-        };
-        let Ok(_) = TreeDisconnectResponse::read_from(&mut body.as_ref()) else {
-            return;
-        };
-        let _ = verify_tree_disconnect_header(&header);
+    pub fn share_type(&self) -> ShareType {
+        self.share_type
     }
-    pub(crate) fn session(&self) -> &Session202 {
-        self.session.borrow()
+    pub fn is_disk(&self) -> bool {
+        self.share_type == ShareType::Disk
     }
-    pub fn id(&self) -> NonZero<u32> {
-        self.id
+    pub fn is_printer(&self) -> bool {
+        self.share_type == ShareType::Printer
     }
+    pub fn is_pipe(&self) -> bool {
+        self.share_type == ShareType::Pipe
+    }
+    pub fn to_disk(self: Arc<Self>) -> Option<DiskTreeConnection> {
+        self.is_disk().then_some(DiskTreeConnection {
+            session: self.session.clone(),
+            dfs_capability: self.dfs_capability,
+            id: self.id,
+        })
+    }
+    pub fn from_disk(disk: Arc<DiskTreeConnection>) -> Self {
+        Self {
+            session: disk.session.clone(),
+            share_type: ShareType::Disk,
+            dfs_capability: disk.dfs_capability,
+            id: disk.id,
+        }
+    }
+}
+impl DiskTreeConnection {
     pub async fn open_file(
         self: &Arc<Self>,
         path: &str,
@@ -90,6 +104,58 @@ impl TreeConnection {
         create_disposition: DirCreateDisposition,
     ) -> Result<(Directory, CreateActionTaken), CreateDirError> {
         crate::dir::open(self, path, create_disposition).await
+    }
+}
+
+pub trait Tree: Sized + Send + Sync + 'static {
+    fn session(&self) -> &Session202;
+    fn id(&self) -> NonZero<u32>;
+    fn to_generic(self: Arc<Self>) -> TreeConnection;
+    fn disconnect(self) -> impl Future<Output = ()> + Send {
+        async move {
+            let session = self.session();
+            let key = session.requires_signing().then_some(*session.session_key());
+            let header = SyncHeader202Outgoing::from_tree_con(&self, Command202::TreeDisconnect);
+            let Ok((header, body)) = session
+                .connection
+                .signup_message(header, &TreeDisconnectRequest, false, key)
+                .await
+            else {
+                return;
+            };
+            let Ok(_) = TreeDisconnectResponse::read_from(&mut body.as_ref()) else {
+                return;
+            };
+            let _ = verify_tree_disconnect_header(&header);
+        }
+    }
+}
+impl Tree for DiskTreeConnection {
+    fn session(&self) -> &Session202 {
+        &self.session
+    }
+    fn id(&self) -> NonZero<u32> {
+        self.id
+    }
+
+    fn to_generic(self: Arc<Self>) -> TreeConnection {
+        TreeConnection::from_disk(self)
+    }
+}
+impl Tree for TreeConnection {
+    fn session(&self) -> &Session202 {
+        &self.session
+    }
+    fn id(&self) -> NonZero<u32> {
+        self.id
+    }
+    fn to_generic(self: Arc<Self>) -> TreeConnection {
+        Self {
+            session: self.session.clone(),
+            share_type: self.share_type,
+            dfs_capability: self.dfs_capability,
+            id: self.id,
+        }
     }
 }
 
@@ -244,7 +310,7 @@ impl From<std::io::Error> for ReadError {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShareType {
     Disk,
     Pipe,

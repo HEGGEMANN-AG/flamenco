@@ -1,6 +1,6 @@
 use std::num::NonZero;
 
-use crate::{session::Session202, tree::TreeConnection};
+use crate::{session::Session202, tree::Tree};
 
 const PROTOCOL_ID: [u8; 4] = [0xFE, b'S', b'M', b'B'];
 
@@ -29,7 +29,7 @@ impl SyncHeader202Outgoing {
             session_id: Some(session.id),
         }
     }
-    pub fn from_tree_con(tree_con: &TreeConnection, command: Command202) -> Self {
+    pub fn from_tree_con(tree_con: &impl Tree, command: Command202) -> Self {
         let header = Self::from_session(tree_con.session(), command);
         Self {
             tree_id: Some(tree_con.id()),

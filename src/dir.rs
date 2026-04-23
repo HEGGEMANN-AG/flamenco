@@ -14,13 +14,13 @@ use crate::{
     },
     header::{Command202, SyncHeader202Outgoing},
     message::{self, WriteError},
-    tree::TreeConnection,
+    tree::{DiskTreeConnection, Tree},
 };
 
 pub mod query;
 
 pub struct Directory {
-    tree_connection: Arc<TreeConnection>,
+    tree_connection: Arc<DiskTreeConnection>,
     id: FileId,
     oplock_level: Option<OplockLevel202>,
     allocation_size: u64,
@@ -32,11 +32,11 @@ pub struct Directory {
 }
 
 pub(crate) async fn open(
-    tree_connection: &Arc<TreeConnection>,
+    tree_connection: &Arc<DiskTreeConnection>,
     path: &str,
     create_disposition: DirCreateDisposition,
 ) -> Result<(Directory, CreateActionTaken), CreateDirError> {
-    let header = SyncHeader202Outgoing::from_tree_con(tree_connection, Command202::Create);
+    let header = SyncHeader202Outgoing::from_tree_con(tree_connection.as_ref(), Command202::Create);
     let request = FileCreateRequest {
         oplock_level: None,
         impersonation_level: ImpersonationLevel::Impersonation,
@@ -98,8 +98,8 @@ impl Directory {
     async fn send_close(&mut self) -> Result<(), std::io::Error> {
         Self::send_close_raw(self.tree_connection.clone(), self.id).await
     }
-    async fn send_close_raw(tree_connection: Arc<TreeConnection>, id: FileId) -> Result<(), std::io::Error> {
-        let header = SyncHeader202Outgoing::from_tree_con(&tree_connection, Command202::Close);
+    async fn send_close_raw(tree_connection: Arc<DiskTreeConnection>, id: FileId) -> Result<(), std::io::Error> {
+        let header = SyncHeader202Outgoing::from_tree_con(tree_connection.as_ref(), Command202::Close);
         let session = tree_connection.session();
         let session_key = session.requires_signing().then_some(session.session_key()).copied();
         let (header, body) = match session
