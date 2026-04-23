@@ -3,7 +3,7 @@ use std::io::Read;
 #[cfg(feature = "chrono")]
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, Utc};
 
-mod attributes;
+pub mod attributes;
 pub mod client;
 pub mod dir;
 mod error;
