@@ -53,6 +53,7 @@ impl Session202 {
         target_spn: Option<&str>,
     ) -> Result<Arc<Session202>, SessionSetupError> {
         let mut auth_context = match ClientBuilder::new_from_credentials(cred, target_spn)
+            .request_mutual_auth()
             .request_delegation()
             .initialize()
             .map_err(SessionSetupError::InitializeSecurityContext)?
