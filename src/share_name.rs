@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 const SHARE_NAME_ILLEGAL_CHARACTERS: &[char] = &[
     '"', '/', '\\', '[', ']', ':', '|', '<', '>', '+', '=', ';', ',', '*', '?',
 ];
@@ -30,4 +32,14 @@ pub enum InvalidShareName {
     TooLong,
     InvalidCharacter(char),
     InvalidControlCharacter,
+}
+impl std::error::Error for InvalidShareName {}
+impl Display for InvalidShareName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InvalidShareName::TooLong => write!(f, "Share name is too long"),
+            InvalidShareName::InvalidCharacter(c) => write!(f, "Invalid character: {c}"),
+            InvalidShareName::InvalidControlCharacter => write!(f, "Invalid control character"),
+        }
+    }
 }

@@ -1,5 +1,5 @@
 use std::{
-    fmt::Debug,
+    fmt::{Debug, Display},
     io::{Cursor, Read, Seek, SeekFrom},
     num::NonZero,
     sync::Arc,
@@ -195,6 +195,32 @@ pub enum SessionSetupError {
     SessionKeyTooShort,
     InvalidMessage,
     ServerError { code: NonZero<u32>, body: ErrorResponse2 },
+}
+impl std::error::Error for SessionSetupError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::InitializeSecurityContext(_)
+            | Self::DisallowedGuestAccess
+            | Self::AuthContextTokenTooLong
+            | Self::SessionKeyTooShort
+            | Self::InvalidMessage
+            | Self::ServerError { .. } => None,
+        }
+    }
+}
+impl Display for SessionSetupError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(error) => write!(f, "IO Error: {error}"),
+            Self::InitializeSecurityContext(_) => write!(f, "GSSAPI error"),
+            Self::DisallowedGuestAccess => write!(f, "Guest access is not allowed or signing is required"),
+            Self::AuthContextTokenTooLong => write!(f, "Auth context by the server was too long"),
+            Self::SessionKeyTooShort => write!(f, "Session key by GSSAPI was too short"),
+            Self::InvalidMessage => write!(f, "Server sent an invalid message"),
+            Self::ServerError { code, .. } => write!(f, "Server sent error code {code}"),
+        }
+    }
 }
 impl From<MsgWriteError> for SessionSetupError {
     fn from(value: MsgWriteError) -> Self {

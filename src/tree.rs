@@ -1,4 +1,5 @@
 use std::{
+    fmt::Display,
     io::{Cursor, Read, Seek, SeekFrom},
     num::NonZero,
     sync::Arc,
@@ -181,6 +182,25 @@ pub enum TreeConnectError {
     InvalidMessage,
     Server { code: NonZero<u32>, body: ErrorResponse2 },
 }
+impl std::error::Error for TreeConnectError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(io) => Some(io),
+            Self::InvalidPath(isp) => Some(isp),
+            Self::InvalidMessage | Self::Server { .. } => None,
+        }
+    }
+}
+impl Display for TreeConnectError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TreeConnectError::Io(error) => write!(f, "IO Error: {error}"),
+            TreeConnectError::InvalidPath(invalid_share_path) => write!(f, "Invalid share path: {invalid_share_path}"),
+            TreeConnectError::InvalidMessage => write!(f, "Invalid message from server"),
+            TreeConnectError::Server { code, .. } => write!(f, "Server sent error code {code}"),
+        }
+    }
+}
 impl ServerError for TreeConnectError {
     fn invalid_message() -> Self {
         Self::InvalidMessage
@@ -243,6 +263,25 @@ pub enum InvalidSharePath {
     MissingSeparator,
     ServerNameTooLong,
     InvalidShareName(InvalidShareName),
+}
+impl std::error::Error for InvalidSharePath {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        if let Self::InvalidShareName(isn) = self {
+            Some(isn)
+        } else {
+            None
+        }
+    }
+}
+impl Display for InvalidSharePath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoLeadingSlashes => write!(f, "Share path has to start with two leading slashes"),
+            Self::MissingSeparator => write!(f, "No slash separator found"),
+            Self::ServerNameTooLong => write!(f, "Server name is too long"),
+            Self::InvalidShareName(isn) => write!(f, "Invalid share name: {isn}"),
+        }
+    }
 }
 
 #[derive(Debug)]

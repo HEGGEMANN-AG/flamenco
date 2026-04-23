@@ -1,4 +1,4 @@
-use std::{num::NonZero, sync::Arc};
+use std::{fmt::Display, num::NonZero, sync::Arc};
 
 #[cfg(feature = "chrono")]
 use chrono::{DateTime, Utc};
@@ -160,6 +160,24 @@ pub enum CreateDirError {
     NotADirectory,
     Io(std::io::Error),
     ServerError { code: NonZero<u32>, body: ErrorResponse2 },
+}
+impl std::error::Error for CreateDirError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(io) => Some(io),
+            Self::InvalidMessage | Self::NotADirectory | Self::ServerError { .. } => None,
+        }
+    }
+}
+impl Display for CreateDirError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidMessage => write!(f, "the message sent by the server is invalid"),
+            Self::Io(io) => write!(f, "IO Error: {io}"),
+            Self::NotADirectory => write!(f, "the file opened is not a directory"),
+            Self::ServerError { code, .. } => write!(f, "Server sent error code {code}"),
+        }
+    }
 }
 impl From<std::io::Error> for CreateDirError {
     fn from(value: std::io::Error) -> Self {

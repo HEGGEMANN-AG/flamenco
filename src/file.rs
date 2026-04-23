@@ -1,4 +1,5 @@
 use std::{
+    fmt::Display,
     io::{Cursor, SeekFrom},
     num::NonZero,
     ops::BitOr,
@@ -315,6 +316,24 @@ pub enum OpenError {
     Io(std::io::Error),
     InvalidMessage,
     ServerError { code: NonZero<u32>, body: ErrorResponse2 },
+}
+impl std::error::Error for OpenError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(io) => Some(io),
+            _ => None,
+        }
+    }
+}
+impl Display for OpenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::IsADirectory => write!(f, "File opened is a directory"),
+            Self::InvalidMessage => write!(f, "Message sent by the server was invalid"),
+            Self::Io(io) => write!(f, "IO Error: {io}"),
+            Self::ServerError { code, .. } => write!(f, "Server sent an error with code {code}"),
+        }
+    }
 }
 impl From<std::io::Error> for OpenError {
     fn from(value: std::io::Error) -> Self {
