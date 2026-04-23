@@ -16,6 +16,8 @@ use crate::{
     tree::Tree,
 };
 
+const INVALID_PARAMETER: u32 = 0xc000000d;
+
 #[derive(Debug, Clone, Copy)]
 pub struct Chunk<Range = RangeInclusive<u64>> {
     pub(crate) source_range: Range,
@@ -66,7 +68,10 @@ pub(crate) async fn server_copy<T: FileRange>(
             WriteError::Connection(error) => ServerCopyError::Io(error),
             WriteError::MessageTooLong => ServerCopyError::InvalidMessage,
         })?;
-    if let Some(code) = NonZero::new(header.status) {
+    let is_invalid_param = header.status == INVALID_PARAMETER;
+    if let Some(code) = NonZero::new(header.status)
+        && !is_invalid_param
+    {
         return Err(ServerCopyError::handle_error_body(code, &body));
     }
     let ioctl = IoCtlResponse::read_from(Cursor::new(body)).map_err(|re| match re {
@@ -77,11 +82,19 @@ pub(crate) async fn server_copy<T: FileRange>(
     let chunks_written = server_copy_resp.read_u32_le()?;
     let chunk_bytes_written = server_copy_resp.read_u32_le()?;
     let total_bytes_written = server_copy_resp.read_u32_le()?;
-    Ok(ServerCopyResponse {
-        chunks_written,
-        chunk_bytes_written,
-        total_bytes_written,
-    })
+    if is_invalid_param {
+        Err(ServerCopyError::Refused {
+            max_chunk_count: chunks_written,
+            max_chunk_size: chunk_bytes_written,
+            max_total_copy: total_bytes_written,
+        })
+    } else {
+        Ok(ServerCopyResponse {
+            chunks_written,
+            chunk_bytes_written,
+            total_bytes_written,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -89,13 +102,20 @@ pub enum ServerCopyError {
     FilesFromDifferentTrees,
     Io(std::io::Error),
     InvalidMessage,
+    Refused {
+        max_chunk_count: u32,
+        max_chunk_size: u32,
+        max_total_copy: u32,
+    },
     ServerError(NonZero<u32>, ErrorResponse2),
 }
 impl std::error::Error for ServerCopyError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io(io) => Some(io),
-            Self::FilesFromDifferentTrees | Self::InvalidMessage | Self::ServerError(_, _) => None,
+            Self::Refused { .. } | Self::FilesFromDifferentTrees | Self::InvalidMessage | Self::ServerError(_, _) => {
+                None
+            }
         }
     }
 }
@@ -110,6 +130,14 @@ impl Display for ServerCopyError {
             Self::FilesFromDifferentTrees => write!(f, "The file handles provided are from different tree connections"),
             Self::InvalidMessage => write!(f, "A message sent by the server was invalid"),
             Self::Io(io) => write!(f, "An error occured while reading or writing: {io}"),
+            Self::Refused {
+                max_chunk_count,
+                max_chunk_size,
+                max_total_copy,
+            } => write!(
+                f,
+                "Server refused to copy. It only accepts ({max_chunk_count} chunks at maximum {max_chunk_size} size for a maximum total of {max_total_copy}"
+            ),
             Self::ServerError(code, _) => write!(f, "the server sent an error code {code}"),
         }
     }
