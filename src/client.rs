@@ -67,7 +67,7 @@ impl Client202 {
             SecurityMode::SigningEnabled
         }
     }
-    pub async fn connect(self: Arc<Self>, addr: impl ToSocketAddrs) -> Result<Arc<Connection>, ConnectError> {
+    pub async fn connect(self: &Arc<Self>, addr: impl ToSocketAddrs) -> Result<Arc<Connection>, ConnectError> {
         Connection::new(self, addr).await
     }
 }
@@ -182,7 +182,7 @@ impl Connection {
     ) -> Result<Arc<Session202>, SessionSetupError> {
         Session202::new(self, credentials, target_spn).await
     }
-    pub async fn new(client: Arc<Client202>, addr: impl ToSocketAddrs) -> Result<Arc<Connection>, ConnectError> {
+    pub async fn new(client: &Arc<Client202>, addr: impl ToSocketAddrs) -> Result<Arc<Connection>, ConnectError> {
         let (rtcp, wtcp) = TcpStream::connect(addr).await?.into_split();
         let neg_header = SyncHeader202Outgoing::default();
         let neg_req = NegotiateRequest202 {
@@ -230,7 +230,7 @@ impl Connection {
             return Err(ConnectError::ServerChoseUnsupportedDialect);
         };
         let connection = Connection {
-            client,
+            client: client.clone(),
             outstanding_requests,
             open_sessions,
             message_id,
