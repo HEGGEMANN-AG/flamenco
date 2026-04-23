@@ -8,6 +8,7 @@ use chrono::{DateTime, Utc};
 
 use crate::{
     ReadIntLe,
+    attributes::FileAttributes,
     dir::query::{DirectoryInformationClass, QueryInformation},
     file::ShortFileId,
 };
@@ -21,7 +22,7 @@ pub struct IdFullDirectoryInformation {
     pub change_time: u64,
     pub end_of_file: u64,
     pub allocation_size: u64,
-    pub file_attributes: u32,
+    pub file_attributes: FileAttributes,
     pub ea_size: u32,
     pub file_id: Option<ShortFileId>,
     pub file_name: Box<str>,
@@ -57,7 +58,7 @@ impl QueryInformation for IdFullDirectoryInformation {
         let change_time = r.read_u64_le()?;
         let end_of_file = r.read_u64_le()?;
         let allocation_size = r.read_u64_le()?;
-        let file_attributes = r.read_u32_le()?;
+        let file_attributes = FileAttributes::from_int(r.read_u32_le()?);
         let file_name_length = r.read_u32_le()?;
         let ea_size = r.read_u32_le()?;
         let _reserved = r.read_u32_le()?;
