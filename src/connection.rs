@@ -25,11 +25,12 @@ use uuid::Uuid;
 use crate::{
     client::{Client, ClientCompat},
     connection::message::IncomingMessage,
+    credits::Credits,
     error::{ErrorResponse2, ServerError},
-    header::{Command202, SyncHeader202Outgoing, SyncHeaderIncoming},
+    header::{Command, SyncHeaderIncoming, SyncHeaderOutgoing},
     message::{MessageBody, ReadError, WriteError},
     negotiate::{Capabilities, Dialect, NegotiateError, NegotiateRequest, NegotiateResponse},
-    session::{Session202, SessionSetupError},
+    session::{Session, SessionSetupError},
     sign::{SecurityMode, ValidationContext},
 };
 
@@ -39,18 +40,18 @@ const MINIMUM_CREDITS: u16 = 128;
 const MINIMUM_TRANSACT_SIZE: u32 = 65536;
 
 pub(crate) type OutstandingRequests = HashMap<u64, Sender<(Arc<SyncHeaderIncoming>, Arc<[u8]>)>>;
-type OpenSessions = HashMap<NonZero<u64>, Weak<Session202>>;
+type OpenSessions = HashMap<NonZero<u64>, Weak<Session>>;
 
 struct ConnectionHandle<'ch> {
     write_tcp: &'ch Mutex<OwnedWriteHalf>,
     message_id: &'ch AtomicU64,
     outstanding_requests: &'ch Mutex<OutstandingRequests>,
-    credits: Option<&'ch AtomicU16>,
+    credits: &'ch Credits,
 }
 impl<'ch> ConnectionHandle<'ch> {
     pub(crate) async fn signup_message(
         &self,
-        mut header: SyncHeader202Outgoing,
+        mut header: SyncHeaderOutgoing,
         msg: &impl MessageBody,
         add_null: bool,
         key: Option<[u8; 16]>,
@@ -58,28 +59,43 @@ impl<'ch> ConnectionHandle<'ch> {
         let mut wtcp = self.write_tcp.lock().await;
         let next_message_id = self.message_id.fetch_add(1, Ordering::Relaxed);
         header.message_id = next_message_id;
-        if let Some(credits) = self.credits {
-            let mut current = credits.load(Ordering::Acquire);
-            let charge = msg.calculate_credits();
-            let new = loop {
-                if current < charge {
-                    return Err(WriteError::NotEnoughCredits);
-                }
-                let new = current - charge;
-                match credits.compare_exchange_weak(current, new, Ordering::AcqRel, Ordering::Acquire) {
-                    Ok(n) => break n,
-                    Err(actual) => current = actual,
-                }
-            };
-            header.credit_charge = charge;
-            header.credit_request = MINIMUM_CREDITS.saturating_sub(new);
-        }
+        let (charge, request) = match self.credits {
+            Credits::Simple(c) | Credits::Multi(c) if header.command == Command::Negotiate => (0, 0),
+            Credits::Simple(_) => (0, MINIMUM_CREDITS),
+            Credits::Multi(atomic) => {
+                let charge = msg.calculate_credits();
+                let mut current = atomic.load(Ordering::Acquire);
+                let credits_after = loop {
+                    if current < charge {
+                        return Err(WriteError::NotEnoughCredits);
+                    }
+                    let new = current - charge;
+                    match atomic.compare_exchange_weak(current, new, Ordering::AcqRel, Ordering::Acquire) {
+                        Ok(_) => break new,
+                        Err(actual) => current = actual,
+                    }
+                };
+                let request = MINIMUM_CREDITS.saturating_sub(credits_after).max(1).max(charge);
+                (charge, request)
+            }
+        };
+        header.credit_charge = charge;
+        header.credit_request = request;
         let (sx, rx) = tokio::sync::oneshot::channel();
         self.outstanding_requests.lock().await.insert(next_message_id, sx);
         message::write_202_message(wtcp.deref_mut(), key, header, msg, add_null).await?;
         let (header, body) = rx.await.expect("dropped sender?");
-        if let Some(credits) = self.credits {
-            credits.fetch_add(header.credits, Ordering::AcqRel);
+        match self.credits {
+            Credits::Simple(atomic_u16) => {
+                if header.credits > 0 {
+                    atomic_u16.fetch_add(1, Ordering::AcqRel);
+                }
+            }
+            Credits::Multi(atomic_u16) => {
+                if header.credits > 0 {
+                    atomic_u16.fetch_add(header.credits, Ordering::AcqRel);
+                }
+            }
         }
         Ok((header, body))
     }
@@ -99,8 +115,8 @@ pub struct Connection {
     capabilities: u32,
     negotiate_time: u64,
     server_start_time: u64,
-    max_dialect: Dialect,
-    credits: Option<AtomicU16>,
+    negotiated_dialect: Dialect,
+    credits: Credits,
     /// What the server requires
     requires_signing: bool,
     shutdown_handle: Option<Sender<()>>,
@@ -111,19 +127,19 @@ impl Connection {
             write_tcp: &self.write_tcp,
             message_id: &self.message_id,
             outstanding_requests: &self.outstanding_requests,
-            credits: self.usable_credits(),
+            credits: &self.credits,
         }
     }
     pub(crate) async fn signup_message(
         &self,
-        header: SyncHeader202Outgoing,
+        header: SyncHeaderOutgoing,
         msg: &impl MessageBody,
         add_null: bool,
         key: Option<[u8; 16]>,
     ) -> Result<(Arc<SyncHeaderIncoming>, Arc<[u8]>), crate::message::WriteError> {
         self.as_handle().signup_message(header, msg, add_null, key).await
     }
-    pub(crate) async fn signup_session(&self, session_id: NonZero<u64>, session: Weak<Session202>) -> Result<(), ()> {
+    pub(crate) async fn signup_session(&self, session_id: NonZero<u64>, session: Weak<Session>) -> Result<(), ()> {
         let mut map = self.open_sessions.write().await;
         match map.insert(session_id, session) {
             Some(_) => Err(()),
@@ -169,16 +185,14 @@ impl Connection {
         self: Arc<Self>,
         credentials: Credentials<Outbound>,
         target_spn: Option<&str>,
-    ) -> Result<Arc<Session202>, SessionSetupError> {
-        Session202::new(self, credentials, target_spn).await
+    ) -> Result<Arc<Session>, SessionSetupError> {
+        Session::new(self, credentials, target_spn).await
     }
-    fn supports_multi_credits(&self) -> bool {
+    pub fn supports_multi_credits(&self) -> bool {
         self.capabilities & 0x04 != 0
     }
-    fn usable_credits(&self) -> Option<&AtomicU16> {
-        self.credits
-            .as_ref()
-            .filter(|_| self.max_dialect != Dialect::SMB2020 && self.supports_multi_credits())
+    pub fn dialect(&self) -> Dialect {
+        self.negotiated_dialect
     }
     pub async fn new(
         client: &Arc<Client>,
@@ -216,7 +230,7 @@ impl Connection {
         shutdown_handle: Sender<()>,
     ) -> Result<Arc<Connection>, ConnectError> {
         let write_tcp = Mutex::new(wtcp);
-        let header = SyncHeader202Outgoing::default();
+        let header = SyncHeaderOutgoing::default();
         let message_id = AtomicU64::default();
         let (capabilities, dialects) = match &client.maximum_compatibility {
             ClientCompat::Smb202 => (Capabilities::NONE, vec![Dialect::SMB2020]),
@@ -238,10 +252,10 @@ impl Connection {
             write_tcp: &write_tcp,
             message_id: &message_id,
             outstanding_requests: &outstanding_requests,
-            credits: None,
+            credits: &Credits::Simple(AtomicU16::default()),
         };
         let (header, body) = ch.signup_message(header, &neg_req, false, None).await?;
-        if header.command != Command202::Negotiate {
+        if header.command != Command::Negotiate {
             return Err(ConnectError::InvalidMessage);
         }
         if let Some(code) = NonZero::new(header.status) {
@@ -271,18 +285,23 @@ impl Connection {
             Dialect::SMB21 => Dialect::SMB21,
             _ => return Err(ConnectError::ServerChoseUnsupportedDialect),
         };
+        let credits = match dialect {
+            Dialect::SMB2020 => Credits::Simple(AtomicU16::new(header.credits)),
+            _ if capabilities & 0x04 != 0 => Credits::Simple(AtomicU16::new(header.credits)),
+            _ => Credits::Multi(AtomicU16::new(header.credits)),
+        };
         let connection = Connection {
             client,
             outstanding_requests,
             open_sessions,
             message_id,
             write_tcp,
-            credits: (capabilities & 0x04 != 0).then_some(AtomicU16::new(header.credits)),
+            credits,
             max_transaction_size: max_transact_size,
             max_read_size,
             max_write_size,
             server_guid,
-            max_dialect,
+            negotiated_dialect: max_dialect,
             capabilities,
             negotiate_time: system_time,
             server_start_time,
@@ -328,7 +347,7 @@ impl Connection {
 
             let out_of_session = matches!(
                 header.command,
-                Command202::Negotiate | Command202::SessionSetup | Command202::Logoff
+                Command::Negotiate | Command::SessionSetup | Command::Logoff
             );
 
             match session_opt {
@@ -397,7 +416,7 @@ impl Drop for Connection {
 }
 
 fn verify_negotiate_header(header: &SyncHeaderIncoming) -> Result<(), ConnectError> {
-    if header.command != Command202::Negotiate
+    if header.command != Command::Negotiate
         || header.is_async()
         || header.tree_id.is_some()
         || header.session_id.is_some()

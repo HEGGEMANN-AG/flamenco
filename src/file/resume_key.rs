@@ -2,13 +2,13 @@ use std::{io::Cursor, num::NonZero, ops::RangeInclusive};
 
 use crate::{
     file::File,
-    header::{Command202, SyncHeader202Outgoing},
+    header::{Command, SyncHeaderOutgoing},
     ioctl::{ControlCode, Flags, IoCtlRequest, IoCtlRequestKind, IoCtlResponse, SourceKey},
     tree::Tree,
 };
 
 pub(crate) async fn get_resume_key(file: &File) -> SourceKey {
-    let header = SyncHeader202Outgoing::from_tree_con(file.tree_connection.as_ref(), Command202::IoCtl);
+    let header = SyncHeaderOutgoing::from_tree_con(file.tree_connection.as_ref(), Command::IoCtl);
     let request = IoCtlRequest {
         kind: IoCtlRequestKind::<RangeInclusive<u64>>::SrvRequestResumeKey,
         file_id: file.id,

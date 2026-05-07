@@ -8,7 +8,7 @@ use crate::{
     ReadIntLe,
     dir::Directory,
     file::FileId,
-    header::{Command202, SyncHeader202Outgoing},
+    header::{Command, SyncHeaderOutgoing},
     message::MessageBody,
     tree::Tree,
 };
@@ -26,7 +26,7 @@ pub use id_full_directory_information::IdFullDirectoryInformation;
 pub use names_information::NamesInformation;
 
 pub async fn query_directory<I: QueryInformation>(dir: &Directory, search_pattern: &str) -> Box<[I]> {
-    let header = SyncHeader202Outgoing::from_tree_con(dir.tree_connection.as_ref(), Command202::QueryDirectory);
+    let header = SyncHeaderOutgoing::from_tree_con(dir.tree_connection.as_ref(), Command::QueryDirectory);
     let output_buffer_length = dir.tree_connection.session().connection.max_transaction_size();
     let request = QueryDirectoryRequest {
         information_class: I::class(),

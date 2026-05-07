@@ -14,7 +14,7 @@ use tokio::{
 };
 
 use crate::{
-    header::{FLAG_SIGNED, SyncHeaderIncoming, SyncHeader202Outgoing},
+    header::{FLAG_SIGNED, SyncHeaderIncoming, SyncHeaderOutgoing},
     message::{MessageBody, ReadError, WriteError},
     sign::{ValidationContext, ValidationError},
 };
@@ -124,7 +124,7 @@ impl Validator {
 
 fn buffer_and_sign_message<M: MessageBody>(
     sign_with_key: Option<[u8; 16]>,
-    mut header: SyncHeader202Outgoing,
+    mut header: SyncHeaderOutgoing,
     body: &M,
     add_null: bool,
 ) -> Vec<u8> {
@@ -152,7 +152,7 @@ fn buffer_and_sign_message<M: MessageBody>(
 pub async fn write_202_message<W: AsyncWrite + Unpin, M: MessageBody>(
     w: &mut W,
     sign_with_key: Option<[u8; 16]>,
-    header: SyncHeader202Outgoing,
+    header: SyncHeaderOutgoing,
     body: &M,
     add_null: bool,
 ) -> Result<(), WriteError> {

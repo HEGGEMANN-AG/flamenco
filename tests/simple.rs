@@ -3,7 +3,7 @@ use std::sync::Arc;
 use flamenco::{
     client::Client,
     file::{AccessMask, CreateDisposition},
-    session::Session202,
+    session::Session,
     tree::{Tree, TreeConnection},
 };
 use kenobi::{cred::Credentials, mech::Mechanism};
@@ -22,7 +22,7 @@ async fn main() {
     let (con, drive) = client.connect(server_copy).await.unwrap();
     tokio::spawn(drive);
     let con = con.await.unwrap();
-    let session = Session202::new(con, credentials, target_spn.as_deref()).await.unwrap();
+    let session = Session::new(con, credentials, target_spn.as_deref()).await.unwrap();
     let tree = TreeConnection::new(session.clone(), &share_path)
         .await
         .unwrap()

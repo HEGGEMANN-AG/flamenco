@@ -13,15 +13,15 @@ use crate::{
         AccessMask, File, OpenError,
         create::{CreateActionTaken, CreateDisposition},
     },
-    header::{Command202, SyncHeader202Outgoing, SyncHeaderIncoming},
+    header::{Command, SyncHeaderIncoming, SyncHeaderOutgoing},
     message::{MessageBody, ReadError as MsgReadError, WriteError as MsgWriteError},
-    session::Session202,
+    session::Session,
     share_name::{InvalidShareName, ShareName},
 };
 
 #[derive(Debug)]
 pub struct DiskTreeConnection {
-    session: Arc<Session202>,
+    session: Arc<Session>,
     /// There are no valid flags in 202 besides the SMB2_SHARE_CAP_DFS
     dfs_capability: bool,
     id: NonZero<u32>,
@@ -29,15 +29,15 @@ pub struct DiskTreeConnection {
 
 #[derive(Debug)]
 pub struct TreeConnection {
-    session: Arc<Session202>,
+    session: Arc<Session>,
     share_type: ShareType,
     /// There are no valid flags in 202 besides the SMB2_SHARE_CAP_DFS
     dfs_capability: bool,
     id: NonZero<u32>,
 }
 impl TreeConnection {
-    pub async fn new(session: Arc<Session202>, path: &str) -> Result<Arc<TreeConnection>, TreeConnectError> {
-        let tc_header = SyncHeader202Outgoing::from_session(&session, Command202::TreeConnect);
+    pub async fn new(session: Arc<Session>, path: &str) -> Result<Arc<TreeConnection>, TreeConnectError> {
+        let tc_header = SyncHeaderOutgoing::from_session(&session, Command::TreeConnect);
         let session_key = session.requires_signing().then_some(session.session_key()).copied();
         if let Err(e) = parse_share_path(path) {
             return Err(TreeConnectError::InvalidPath(e));
@@ -111,14 +111,14 @@ impl DiskTreeConnection {
 }
 
 pub trait Tree: Sized + Send + Sync + 'static {
-    fn session(&self) -> &Session202;
+    fn session(&self) -> &Session;
     fn id(&self) -> NonZero<u32>;
     fn to_generic(self: Arc<Self>) -> TreeConnection;
     fn disconnect(self) -> impl Future<Output = ()> + Send {
         async move {
             let session = self.session();
             let key = session.requires_signing().then_some(*session.session_key());
-            let header = SyncHeader202Outgoing::from_tree_con(&self, Command202::TreeDisconnect);
+            let header = SyncHeaderOutgoing::from_tree_con(&self, Command::TreeDisconnect);
             let Ok((header, body)) = session
                 .connection
                 .signup_message(header, &TreeDisconnectRequest, false, key)
@@ -134,7 +134,7 @@ pub trait Tree: Sized + Send + Sync + 'static {
     }
 }
 impl Tree for DiskTreeConnection {
-    fn session(&self) -> &Session202 {
+    fn session(&self) -> &Session {
         &self.session
     }
     fn id(&self) -> NonZero<u32> {
@@ -146,7 +146,7 @@ impl Tree for DiskTreeConnection {
     }
 }
 impl Tree for TreeConnection {
-    fn session(&self) -> &Session202 {
+    fn session(&self) -> &Session {
         &self.session
     }
     fn id(&self) -> NonZero<u32> {
@@ -163,14 +163,14 @@ impl Tree for TreeConnection {
 }
 
 fn verify_tree_connect_header(header: &SyncHeaderIncoming) -> Result<(), TreeConnectError> {
-    if header.command != Command202::TreeConnect || header.is_async() {
+    if header.command != Command::TreeConnect || header.is_async() {
         return Err(TreeConnectError::InvalidMessage);
     }
     Ok(())
 }
 
 fn verify_tree_disconnect_header(header: &SyncHeaderIncoming) -> Result<(), TreeDisconnectError> {
-    if header.command != Command202::TreeDisconnect || header.is_async() {
+    if header.command != Command::TreeDisconnect || header.is_async() {
         Err(TreeDisconnectError::InvalidMessage)
     } else {
         Ok(())

@@ -1,6 +1,6 @@
 use std::num::NonZero;
 
-use crate::{session::Session202, tree::Tree};
+use crate::{session::Session, tree::Tree};
 
 const PROTOCOL_ID: [u8; 4] = [0xFE, b'S', b'M', b'B'];
 
@@ -8,23 +8,21 @@ pub(crate) const FLAG_SIGNED: u32 = 0x08;
 
 /// No status and signature, since they're not supported on the sender anyway
 #[derive(Debug, Default)]
-pub struct SyncHeader202Outgoing {
+pub struct SyncHeaderOutgoing {
     pub credit_charge: u16,
-    pub command: Command202,
+    pub command: Command,
     pub credit_request: u16,
-    pub credits: u16,
     pub flags: u32,
     pub next_command: Option<NonZero<u32>>,
     pub message_id: u64,
     pub tree_id: Option<NonZero<u32>>,
     pub session_id: Option<NonZero<u64>>,
 }
-impl SyncHeader202Outgoing {
-    pub fn from_session(session: &Session202, command: Command202) -> Self {
+impl SyncHeaderOutgoing {
+    pub fn from_session(session: &Session, command: Command) -> Self {
         Self {
             command,
             credit_charge: 0,
-            credits: 1,
             credit_request: 1,
             flags: if session.requires_signing() { FLAG_SIGNED } else { 0 },
             next_command: None,
@@ -33,7 +31,7 @@ impl SyncHeader202Outgoing {
             session_id: Some(session.id),
         }
     }
-    pub fn from_tree_con(tree_con: &impl Tree, command: Command202) -> Self {
+    pub fn from_tree_con(tree_con: &impl Tree, command: Command) -> Self {
         let header = Self::from_session(tree_con.session(), command);
         Self {
             tree_id: Some(tree_con.id()),
@@ -60,7 +58,7 @@ impl SyncHeader202Outgoing {
 pub struct SyncHeaderIncoming {
     /// ignored when sending
     pub status: u32,
-    pub command: Command202,
+    pub command: Command,
     pub credits: u16,
     pub flags: u32,
     pub next_command: Option<NonZero<u32>>,
@@ -80,7 +78,7 @@ impl SyncHeaderIncoming {
         // Ignore credit charge
         let status = u32::from_le_bytes(*b[8..12].as_array().unwrap());
         let command = u16::from_le_bytes(*b[12..14].as_array().unwrap());
-        let command = Command202::from_code(command).ok_or(Error::InvalidCommand)?;
+        let command = Command::from_code(command).ok_or(Error::InvalidCommand)?;
         let credits = u16::from_le_bytes(*b[14..16].as_array().unwrap());
         let flags = u32::from_le_bytes(*b[16..20].as_array().unwrap());
         let next_command = u32::from_le_bytes(*b[20..24].as_array().unwrap());
@@ -116,7 +114,7 @@ pub enum Error {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub enum Command202 {
+pub enum Command {
     #[default]
     Negotiate = 0x00,
     SessionSetup = 0x01,
@@ -138,7 +136,7 @@ pub enum Command202 {
     SetInfo = 0x11,
     OplockBreak = 0x12,
 }
-impl Command202 {
+impl Command {
     pub fn from_code(u: u16) -> Option<Self> {
         match u {
             0x00 => Some(Self::Negotiate),

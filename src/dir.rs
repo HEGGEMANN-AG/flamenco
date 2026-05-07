@@ -12,7 +12,7 @@ use crate::{
         create::{CreateActionTaken, CreateDisposition, CreateResponse, FileCreateRequest},
         verify_close_header,
     },
-    header::{Command202, SyncHeader202Outgoing},
+    header::{Command, SyncHeaderOutgoing},
     message::{self, WriteError},
     tree::{DiskTreeConnection, Tree},
 };
@@ -37,7 +37,7 @@ pub(crate) async fn open(
     desired_access: AccessMask,
     create_disposition: DirCreateDisposition,
 ) -> Result<(Directory, CreateActionTaken), CreateDirError> {
-    let header = SyncHeader202Outgoing::from_tree_con(tree_connection.as_ref(), Command202::Create);
+    let header = SyncHeaderOutgoing::from_tree_con(tree_connection.as_ref(), Command::Create);
     let request = FileCreateRequest {
         oplock_level: None,
         impersonation_level: ImpersonationLevel::Impersonation,
@@ -101,7 +101,7 @@ impl Directory {
         Self::send_close_raw(self.tree_connection.clone(), self.id).await
     }
     async fn send_close_raw(tree_connection: Arc<DiskTreeConnection>, id: FileId) -> Result<(), std::io::Error> {
-        let header = SyncHeader202Outgoing::from_tree_con(tree_connection.as_ref(), Command202::Close);
+        let header = SyncHeaderOutgoing::from_tree_con(tree_connection.as_ref(), Command::Close);
         let session = tree_connection.session();
         let session_key = session.requires_signing().then_some(session.session_key()).copied();
         let (header, body) = match session

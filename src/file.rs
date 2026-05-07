@@ -21,7 +21,7 @@ use crate::{
         read::{ReadFileError, ReadRequest, ReadResponse, ReadResponseError},
         server_copy::{ServerCopyError, ServerCopyResponse},
     },
-    header::{Command202, SyncHeader202Outgoing, SyncHeaderIncoming},
+    header::{Command, SyncHeaderIncoming, SyncHeaderOutgoing},
     ioctl::SourceKey,
     message::WriteError,
     tree::{DiskTreeConnection, Tree},
@@ -73,7 +73,7 @@ impl File {
         desired_access: AccessMask,
         create_disposition: CreateDisposition,
     ) -> Result<(File, CreateActionTaken), OpenError> {
-        let header = SyncHeader202Outgoing::from_tree_con(tree_connection.as_ref(), Command202::Create);
+        let header = SyncHeaderOutgoing::from_tree_con(tree_connection.as_ref(), Command::Create);
         let request_body = FileCreateRequest {
             oplock_level: None,
             impersonation_level: ImpersonationLevel::Impersonation,
@@ -140,7 +140,7 @@ impl File {
         length: u32,
         minimum_count: u32,
     ) -> Result<Box<[u8]>, ReadFileError> {
-        let header = SyncHeader202Outgoing::from_tree_con(tree_connection.as_ref(), Command202::Read);
+        let header = SyncHeaderOutgoing::from_tree_con(tree_connection.as_ref(), Command::Read);
         let session = tree_connection.session();
         let key = session.requires_signing().then_some(session.session_key()).copied();
         let req = ReadRequest {
@@ -172,7 +172,7 @@ impl File {
         Self::send_close_raw(self.tree_connection.clone(), self.id).await
     }
     async fn send_close_raw(tree_connection: Arc<DiskTreeConnection>, id: FileId) -> Result<(), std::io::Error> {
-        let header = SyncHeader202Outgoing::from_tree_con(tree_connection.as_ref(), Command202::Close);
+        let header = SyncHeaderOutgoing::from_tree_con(tree_connection.as_ref(), Command::Close);
         let session = tree_connection.session();
         let session_key = session.requires_signing().then_some(session.session_key()).copied();
         let (header, body) = match session
@@ -286,7 +286,7 @@ impl AsyncSeek for File {
 }
 
 fn verify_create_header(header: &SyncHeaderIncoming) -> Result<(), OpenError> {
-    if header.command != Command202::Create || header.is_async() {
+    if header.command != Command::Create || header.is_async() {
         Err(OpenError::InvalidMessage)
     } else {
         Ok(())
@@ -294,7 +294,7 @@ fn verify_create_header(header: &SyncHeaderIncoming) -> Result<(), OpenError> {
 }
 
 fn verify_read_header(header: &SyncHeaderIncoming) -> Result<(), ReadFileError> {
-    if header.command != Command202::Read || header.is_async() {
+    if header.command != Command::Read || header.is_async() {
         Err(ReadFileError::InvalidMessage)
     } else {
         Ok(())
@@ -302,7 +302,7 @@ fn verify_read_header(header: &SyncHeaderIncoming) -> Result<(), ReadFileError> 
 }
 
 pub(crate) fn verify_close_header(header: &SyncHeaderIncoming) -> Result<(), ReadCloseError> {
-    if header.command != Command202::Close || header.is_async() {
+    if header.command != Command::Close || header.is_async() {
         Err(ReadCloseError::InvalidHeader)
     } else {
         Ok(())

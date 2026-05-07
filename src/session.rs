@@ -15,7 +15,7 @@ use crate::{
     client::GuestPolicy,
     connection::Connection,
     error::{ErrorResponse2, ServerError},
-    header::{Command202, SyncHeader202Outgoing, SyncHeaderIncoming},
+    header::{Command, SyncHeaderIncoming, SyncHeaderOutgoing},
     message::{MessageBody, ReadError as MsgReadError, WriteError as MsgWriteError},
     sign::SecurityMode,
     tree::{TreeConnectError, TreeConnection},
@@ -23,14 +23,14 @@ use crate::{
 
 const ERROR_MORE_PROCESSING_REQUIRED: u32 = 0xC0000016;
 
-pub struct Session202 {
+pub struct Session {
     session_key: [u8; 16],
     pub(crate) id: NonZero<u64>,
     pub(crate) connection: Arc<Connection>,
     flags: SessionFlags,
     requires_signing: bool,
 }
-impl Debug for Session202 {
+impl Debug for Session {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Session202")
             .field("session_key", &"REDACTED")
@@ -41,7 +41,7 @@ impl Debug for Session202 {
             .finish()
     }
 }
-impl Session202 {
+impl Session {
     pub fn requires_signing(&self) -> bool {
         self.requires_signing
     }
@@ -52,7 +52,7 @@ impl Session202 {
         connection: Arc<Connection>,
         cred: Credentials<Outbound>,
         target_spn: Option<&str>,
-    ) -> Result<Arc<Session202>, SessionSetupError> {
+    ) -> Result<Arc<Session>, SessionSetupError> {
         let mut auth_context = match ClientBuilder::new_from_credentials(cred, target_spn)
             .request_mutual_auth()
             .request_delegation()
@@ -65,11 +65,10 @@ impl Session202 {
         let mut session_id = None;
         loop {
             let client = &connection.client;
-            let header = SyncHeader202Outgoing {
-                command: Command202::SessionSetup,
+            let header = SyncHeaderOutgoing {
+                command: Command::SessionSetup,
                 credit_charge: 1,
                 credit_request: 1,
-                credits: 0,
                 flags: 0,
                 next_command: None,
                 message_id: 0,
@@ -125,7 +124,7 @@ impl Session202 {
                     let Some(id) = header.session_id else {
                         return Err(SessionSetupError::InvalidMessage);
                     };
-                    let session = Session202 {
+                    let session = Session {
                         flags,
                         requires_signing,
                         id,
@@ -148,11 +147,10 @@ impl Session202 {
         TreeConnection::new(self, share_path).await
     }
     pub async fn logoff(self) {
-        let logoff_header = SyncHeader202Outgoing {
-            command: Command202::Logoff,
+        let logoff_header = SyncHeaderOutgoing {
+            command: Command::Logoff,
             credit_charge: 1,
             credit_request: 1,
-            credits: 0,
             flags: 0,
             next_command: None,
             message_id: 0,
@@ -173,7 +171,7 @@ impl Session202 {
 }
 
 fn verify_session_setup_header(header: &SyncHeaderIncoming) -> Result<(), SessionSetupError> {
-    if header.command != Command202::SessionSetup || header.is_async() || header.tree_id.is_some() {
+    if header.command != Command::SessionSetup || header.is_async() || header.tree_id.is_some() {
         Err(SessionSetupError::InvalidMessage)
     } else {
         Ok(())
@@ -181,7 +179,7 @@ fn verify_session_setup_header(header: &SyncHeaderIncoming) -> Result<(), Sessio
 }
 
 fn verify_logoff_header(header: &SyncHeaderIncoming) -> Result<(), LogoffError> {
-    if header.command != Command202::Logoff || header.is_async() {
+    if header.command != Command::Logoff || header.is_async() {
         Err(LogoffError::InvalidMessage)
     } else {
         Ok(())
