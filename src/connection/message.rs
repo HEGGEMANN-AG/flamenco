@@ -16,7 +16,6 @@ use tokio::{
 use crate::{
     header::{FLAG_SIGNED, SyncHeader202Incoming, SyncHeader202Outgoing},
     message::{MessageBody, ReadError, WriteError},
-    netbios::{OwnedNetBios, use_as_netbios_content},
     sign::{ValidationContext, ValidationError},
 };
 
@@ -31,8 +30,8 @@ pub async fn read_202_message<R: AsyncRead + Unpin>(
     r: &mut R,
     validation_ctx_receiver: Receiver<ValidationContext>,
 ) -> Result<IncomingMessage, ReadError> {
-    let netbios = OwnedNetBios::read_from_async(r).await?;
-    let Some((header_bytes, message_body)) = netbios.content().split_first_chunk() else {
+    let netbios = crate::netbios::read_message(r).await.map_err(ReadError::Connection)?;
+    let Some((header_bytes, message_body)) = netbios.as_ref().split_first_chunk() else {
         return Err(ReadError::Connection(IoError::new(
             ErrorKind::UnexpectedEof,
             "Not enough data for header",
@@ -158,10 +157,14 @@ pub async fn write_202_message<W: AsyncWrite + Unpin, M: MessageBody>(
     add_null: bool,
 ) -> Result<(), WriteError> {
     let buf = buffer_and_sign_message(sign_with_key, header, body, add_null);
-    let Some(netbios) = use_as_netbios_content(&buf) else {
-        return Err(WriteError::MessageTooLong);
+    let fut = |buffer: &mut Vec<u8>| {
+        let b = buf;
+        *buffer = b;
     };
-    netbios.write_into_async(w).await.map_err(WriteError::Connection)
+    crate::netbios::write_message(w, fut)
+        .await
+        .map_err(WriteError::Connection)?;
+    Ok(())
 }
 
 #[derive(Debug)]
