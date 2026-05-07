@@ -34,6 +34,10 @@ impl Client202 {
             SecurityMode::SigningEnabled
         }
     }
+    /// Starts a connection to a server
+    ///
+    /// Returns a new opening Connection handle and the future that drives the connection.
+    /// The connection must only be awaited until after the driving future has been started, otherwise this will deadlock.
     pub async fn connect(
         self: &Arc<Self>,
         addr: impl ToSocketAddrs,
