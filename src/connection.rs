@@ -79,11 +79,11 @@ impl<'ch> ConnectionHandle<'ch> {
                 (charge, request)
             }
         };
-        header.credit_charge = charge;
+        header.credit_charge = dbg!(charge);
         header.credit_request = request;
         let (sx, rx) = tokio::sync::oneshot::channel();
         self.outstanding_requests.lock().await.insert(next_message_id, sx);
-        message::write_202_message(wtcp.deref_mut(), key, header, msg, add_null).await?;
+        message::write_message(wtcp.deref_mut(), key, header, msg, add_null).await?;
         let (header, body) = rx.await.expect("dropped sender?");
         match self.credits {
             Credits::Simple(atomic_u16) => {
@@ -287,7 +287,7 @@ impl Connection {
         };
         let credits = match dialect {
             Dialect::SMB2020 => Credits::Simple(AtomicU16::new(header.credits)),
-            _ if capabilities & 0x04 != 0 => Credits::Simple(AtomicU16::new(header.credits)),
+            _ if capabilities & 0x04 == 0 => Credits::Simple(AtomicU16::new(header.credits)),
             _ => Credits::Multi(AtomicU16::new(header.credits)),
         };
         let connection = Connection {

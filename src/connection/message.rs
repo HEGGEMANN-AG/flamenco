@@ -149,7 +149,7 @@ fn buffer_and_sign_message<M: MessageBody>(
 }
 
 /// Sets the SIGNED flag depending on the signing key being provided
-pub async fn write_202_message<W: AsyncWrite + Unpin, M: MessageBody>(
+pub async fn write_message<W: AsyncWrite + Unpin, M: MessageBody>(
     w: &mut W,
     sign_with_key: Option<[u8; 16]>,
     header: SyncHeaderOutgoing,
