@@ -3,6 +3,9 @@ use std::{
     num::NonZero,
 };
 
+#[cfg(feature = "tracing")]
+use tracing::error;
+
 use crate::{
     ReadIntLe,
     error::{ErrorResponse2, ServerError},
@@ -104,8 +107,10 @@ impl ReadFileError {
                 std::io::Error::new(std::io::ErrorKind::InvalidData, "server sent an invalid message")
             }
             ReadFileError::Io(io) => io,
-            ReadFileError::ServerError { code, body } => {
-                dbg!(code, body);
+            #[allow(unused_variables)]
+            ReadFileError::ServerError { code, .. } => {
+                #[cfg(feature = "tracing")]
+                error!("Server sent protocol error code {code}");
                 std::io::Error::other("server sent a protocol error")
             }
             ReadFileError::NotEnoughCredits => {

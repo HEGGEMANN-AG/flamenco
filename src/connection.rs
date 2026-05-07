@@ -20,6 +20,8 @@ use tokio::{
     },
     sync::{Mutex, RwLock, oneshot::Receiver, oneshot::Sender},
 };
+#[cfg(feature = "tracing")]
+use tracing::{error, trace, warn};
 use uuid::Uuid;
 
 use crate::{
@@ -55,10 +57,7 @@ impl<'ch> ConnectionHandle<'ch> {
         msg: &impl MessageBody,
         add_null: bool,
         key: Option<[u8; 16]>,
-    ) -> Result<(Arc<SyncHeaderIncoming>, Arc<[u8]>), crate::message::WriteError> {
-        let mut wtcp = self.write_tcp.lock().await;
-        let next_message_id = self.message_id.fetch_add(1, Ordering::Relaxed);
-        header.message_id = next_message_id;
+    ) -> Result<(Arc<SyncHeaderIncoming>, Arc<[u8]>), WriteError> {
         let (charge, request) = match self.credits {
             Credits::Simple(c) | Credits::Multi(c) if header.command == Command::Negotiate => (0, 0),
             Credits::Simple(_) => (0, MINIMUM_CREDITS),
@@ -67,6 +66,8 @@ impl<'ch> ConnectionHandle<'ch> {
                 let mut current = atomic.load(Ordering::Acquire);
                 let credits_after = loop {
                     if current < charge {
+                        #[cfg(feature = "tracing")]
+                        error!("Ran out of credits");
                         return Err(WriteError::NotEnoughCredits);
                     }
                     let new = current - charge;
@@ -79,12 +80,21 @@ impl<'ch> ConnectionHandle<'ch> {
                 (charge, request)
             }
         };
-        header.credit_charge = dbg!(charge);
+        let next_message_id = self.message_id.fetch_add(charge.max(1).into(), Ordering::Relaxed);
+        header.message_id = next_message_id;
+        #[cfg(feature = "tracing")]
+        trace!(message_id = next_message_id, command = ?header.command);
+        header.credit_charge = charge;
         header.credit_request = request;
         let (sx, rx) = tokio::sync::oneshot::channel();
         self.outstanding_requests.lock().await.insert(next_message_id, sx);
-        message::write_message(wtcp.deref_mut(), key, header, msg, add_null).await?;
-        let (header, body) = rx.await.expect("dropped sender?");
+        {
+            message::write_message(self.write_tcp.lock().await.deref_mut(), key, header, msg, add_null).await?;
+        }
+        let Ok((header, body)) = rx.await else {
+            let closed = std::io::Error::new(ErrorKind::ConnectionReset, "connection was closed");
+            return Err(WriteError::Connection(closed));
+        };
         match self.credits {
             Credits::Simple(atomic_u16) => {
                 if header.credits > 0 {
@@ -280,7 +290,7 @@ impl Connection {
         {
             return Err(ConnectError::MaxMessageSizeInsufficient);
         }
-        let max_dialect = match dialect {
+        let negotiated_dialect = match dialect {
             Dialect::SMB2020 => Dialect::SMB2020,
             Dialect::SMB21 => Dialect::SMB21,
             _ => return Err(ConnectError::ServerChoseUnsupportedDialect),
@@ -301,7 +311,7 @@ impl Connection {
             max_read_size,
             max_write_size,
             server_guid,
-            negotiated_dialect: max_dialect,
+            negotiated_dialect,
             capabilities,
             negotiate_time: system_time,
             server_start_time,
@@ -333,10 +343,13 @@ impl Connection {
             } = match read_result {
                 Ok(v) => v,
                 Err(ReadError::Connection(io)) if io.kind() == ErrorKind::ConnectionReset => {
+                    #[cfg(feature = "tracing")]
+                    error!("Connection reset, exiting");
                     break;
                 }
-                Err(err) => {
-                    eprintln!("Error reading message: {err:?}");
+                Err(_err) => {
+                    #[cfg(feature = "tracing")]
+                    error!("Error reading message: {_err:?}");
                     continue;
                 }
             };
@@ -351,36 +364,38 @@ impl Connection {
             );
 
             match session_opt {
-                Some(weak) => match Weak::upgrade(&weak) {
-                    Some(session) => {
+                Some(weak) => {
+                    if let Some(session) = Weak::upgrade(&weak) {
                         let validation_context = ValidationContext {
                             key: Some(*session.session_key()),
                             requires_signing: session.requires_signing(),
                         };
                         if ctx_sender.send(validation_context).is_err() {
-                            eprintln!("Validator dropped before receiving context");
+                            #[cfg(feature = "tracing")]
+                            error!("Validator dropped before receiving context");
                             continue;
                         };
 
                         if signature_validator.await.is_err() {
-                            eprintln!("Bad signature on message");
+                            #[cfg(feature = "tracing")]
+                            warn!("Bad signature on message");
                             return;
                         };
-
                         // Validation passed
                         let message_id = header.message_id;
+                        #[cfg(feature = "tracing")]
+                        trace!(message_id = message_id, command = ?header.command, "Received valid message");
                         let Some(message_sender) = outstanding_requests.lock().await.remove(&message_id) else {
-                            eprintln!("Message request not found");
+                            #[cfg(feature = "tracing")]
+                            error!("Message request not found");
                             continue;
                         };
                         if message_sender.send((header, content)).is_err() {
-                            eprintln!("Message receiver for {message_id} closed early");
+                            #[cfg(feature = "tracing")]
+                            error!("Message receiver for {message_id} closed early");
                         };
                     }
-                    None => {
-                        eprintln!("Session looked for was removed");
-                    }
-                },
+                }
                 None => {
                     if out_of_session {
                         let ctx = ValidationContext {
@@ -388,30 +403,37 @@ impl Connection {
                             requires_signing: false,
                         };
                         if ctx_sender.send(ctx).is_err() {
-                            eprintln!("Validator dropped for out-of-session message");
+                            #[cfg(feature = "tracing")]
+                            error!("Validator dropped for out-of-session message");
                             continue;
                         }
 
                         let message_id = header.message_id;
                         let Some(message_sender) = outstanding_requests.lock().await.remove(&message_id) else {
-                            eprintln!("No outstanding messager for out-of-session message id {message_id}");
+                            #[cfg(feature = "tracing")]
+                            error!("No outstanding messager for out-of-session message id {message_id}");
                             continue;
                         };
                         if message_sender.send((header, content)).is_err() {
-                            eprintln!("Receiver dropped for out-of-session message_id");
+                            #[cfg(feature = "tracing")]
+                            error!("Receiver dropped for out-of-session message_id");
                         }
                     } else {
-                        eprintln!("received in-session command with no matching session");
+                        #[cfg(feature = "tracing")]
+                        error!("received in-session command with no matching session");
                     }
                 }
             }
         }
+        outstanding_requests.lock().await.clear();
     }
 }
 
 impl Drop for Connection {
     fn drop(&mut self) {
-        let _ = self.shutdown_handle.take().unwrap().send(());
+        if let Some(handle) = self.shutdown_handle.take() {
+            let _ = handle.send(());
+        }
     }
 }
 

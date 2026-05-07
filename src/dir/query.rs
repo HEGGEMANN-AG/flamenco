@@ -1,4 +1,5 @@
 use std::{
+    fmt::Display,
     io::{Cursor, Read, Seek},
     num::NonZero,
     ops::{BitAnd, BitOr},
@@ -7,9 +8,10 @@ use std::{
 use crate::{
     ReadIntLe,
     dir::Directory,
+    error::{ErrorResponse2, ServerError},
     file::FileId,
     header::{Command, SyncHeaderOutgoing},
-    message::MessageBody,
+    message::{MessageBody, WriteError},
     tree::Tree,
 };
 
@@ -25,9 +27,14 @@ pub use full_directory_information::FullDirectoryInformation;
 pub use id_full_directory_information::IdFullDirectoryInformation;
 pub use names_information::NamesInformation;
 
-pub async fn query_directory<I: QueryInformation>(dir: &Directory, search_pattern: &str) -> Box<[I]> {
+pub async fn query_directory<I: QueryInformation>(
+    dir: &Directory,
+    search_pattern: &str,
+    max_output_length: Option<u32>,
+) -> Result<Box<[I]>, QueryDirectoryError> {
     let header = SyncHeaderOutgoing::from_tree_con(dir.tree_connection.as_ref(), Command::QueryDirectory);
-    let output_buffer_length = dir.tree_connection.session().connection.max_transaction_size();
+    let output_buffer_length =
+        max_output_length.unwrap_or(dir.tree_connection.session().connection.max_transaction_size());
     let request = QueryDirectoryRequest {
         information_class: I::class(),
         flags: Flags::NONE,
@@ -42,11 +49,18 @@ pub async fn query_directory<I: QueryInformation>(dir: &Directory, search_patter
         .connection
         .signup_message(header, &request, false, key)
         .await
-        .unwrap();
+        .map_err(|we| match we {
+            WriteError::Connection(error) => QueryDirectoryError::Io(error),
+            WriteError::NotEnoughCredits => QueryDirectoryError::NotEnoughCredits,
+            WriteError::MessageTooLong => QueryDirectoryError::InvalidMessage,
+        })?;
     if let Some(code) = NonZero::new(header.status) {
-        panic!("Server sent error code {code}");
+        return Err(QueryDirectoryError::handle_error_body(code, &body));
     }
-    QueryDirectoryResponse::read_from(&mut Cursor::new(body), output_buffer_length).0
+    match QueryDirectoryResponse::read_from(&mut Cursor::new(body), output_buffer_length) {
+        Ok(q) => Ok(q.0),
+        Err(err) => Err(QueryDirectoryError::Io(err)),
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -150,30 +164,70 @@ impl<I> QueryDirectoryResponse<I> {
     const STRUCTURE_SIZE: u16 = 9;
 }
 impl<I: QueryInformation> QueryDirectoryResponse<I> {
-    fn read_from<R: Read + Seek>(r: &mut R, max_output_buffer_length: u32) -> Self {
-        if r.read_u16_le().unwrap() != Self::STRUCTURE_SIZE {
+    fn read_from<R: Read + Seek>(r: &mut R, max_output_buffer_length: u32) -> Result<Self, std::io::Error> {
+        if r.read_u16_le()? != Self::STRUCTURE_SIZE {
             panic!("Bad structure size");
         }
-        let output_buffer_offset = r.read_u16_le().unwrap();
-        let output_buffer_length = r.read_u32_le().unwrap();
+        let output_buffer_offset = r.read_u16_le()?;
+        let output_buffer_length = r.read_u32_le()?;
         if output_buffer_length > max_output_buffer_length {
             panic!("exceeded max output buffer length")
         }
         let mut skip = vec![0; output_buffer_offset as usize - 64 - 8];
-        r.read_exact(&mut skip).unwrap();
+        r.read_exact(&mut skip)?;
         let mut r = r.take(max_output_buffer_length.into());
         let mut last = false;
         let mut results = Vec::new();
         while !last {
-            let (element, is_last) = I::read_from_buffer(&mut r).unwrap();
+            let (element, is_last) = I::read_from_buffer(&mut r)?;
             last |= is_last;
             results.push(element);
         }
-        Self(results.into_boxed_slice())
+        Ok(Self(results.into_boxed_slice()))
     }
 }
 
 pub trait QueryInformation: Sized {
     fn class() -> DirectoryInformationClass;
     fn read_from_buffer<R: Read + Seek>(r: &mut R) -> Result<(Self, bool), std::io::Error>;
+}
+
+#[derive(Debug)]
+pub enum QueryDirectoryError {
+    InvalidMessage,
+    NotEnoughCredits,
+    Io(std::io::Error),
+    ServerError { code: NonZero<u32>, body: ErrorResponse2 },
+}
+impl std::error::Error for QueryDirectoryError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidMessage | Self::NotEnoughCredits | Self::ServerError { .. } => None,
+            Self::Io(error) => Some(error),
+        }
+    }
+}
+impl ServerError for QueryDirectoryError {
+    fn invalid_message() -> Self {
+        Self::InvalidMessage
+    }
+
+    fn parsed(code: NonZero<u32>, body: ErrorResponse2) -> Self {
+        Self::ServerError { code, body }
+    }
+}
+impl From<std::io::Error> for QueryDirectoryError {
+    fn from(value: std::io::Error) -> Self {
+        Self::Io(value)
+    }
+}
+impl Display for QueryDirectoryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidMessage => write!(f, "Invalid message"),
+            Self::NotEnoughCredits => write!(f, "Not enough credits"),
+            Self::ServerError { code, .. } => write!(f, "Server sent an error code: {code}"),
+            Self::Io(error) => write!(f, "IO error: {error}"),
+        }
+    }
 }

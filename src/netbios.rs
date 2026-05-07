@@ -14,8 +14,10 @@ pub async fn write_message<W: AsyncWrite + Unpin>(
     if length >= CRITICAL_SIZE {
         return Err(message_too_long());
     }
-    w.write_u32(length).await?;
-    w.write_all(&v).await?;
+    let mut buf = Vec::with_capacity(4 + v.len());
+    buf.extend_from_slice(&length.to_be_bytes());
+    buf.extend_from_slice(&v);
+    w.write_all(&buf).await?;
     Ok(())
 }
 

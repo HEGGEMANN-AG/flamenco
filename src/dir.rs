@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 
 use crate::{
     attributes::FileAttributes,
+    dir::query::QueryDirectoryError,
     error::{ErrorResponse2, ServerError},
     file::{
         self, AccessMask, FileId, ImpersonationLevel, OplockLevel202, ShareAccess,
@@ -123,8 +124,12 @@ impl Directory {
     pub async fn close(mut self) -> Result<(), std::io::Error> {
         self.send_close().await
     }
-    pub async fn query<I: query::QueryInformation>(&self, search_pattern: &str) -> Box<[I]> {
-        query::query_directory(self, search_pattern).await
+    pub async fn query<I: query::QueryInformation>(
+        &self,
+        search_pattern: &str,
+        max_output_length: Option<u32>,
+    ) -> Result<Box<[I]>, QueryDirectoryError> {
+        query::query_directory(self, search_pattern, max_output_length).await
     }
     pub fn creation_time_raw(&self) -> u64 {
         self.creation_time
