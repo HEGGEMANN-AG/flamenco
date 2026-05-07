@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, ops::Div};
 
 #[derive(Debug)]
 pub enum ReadError {
@@ -22,10 +22,10 @@ pub(crate) trait MessageBody {
     fn send_payload_size(&self) -> u32;
     fn expected_response_payload_size(&self) -> u32;
     fn calculate_credits(&self) -> u16 {
-        (1 + (self
-            .send_payload_size()
+        self.send_payload_size()
             .max(self.expected_response_payload_size())
-            .saturating_sub(1))
-            / 65536) as u16
+            .saturating_sub(1)
+            .div(65536) as u16
+            + 1u16
     }
 }
