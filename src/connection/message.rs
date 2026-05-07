@@ -41,12 +41,7 @@ pub async fn read_202_message<R: AsyncRead + Unpin>(
     let header = SyncHeader202Incoming::from_bytes(header_bytes).unwrap();
     let content: Arc<[u8]> = Arc::from(message_body);
     let header = Arc::new(header);
-    let signature_validator = Validator::new(
-        header.clone(),
-        validation_ctx_receiver,
-        *header_bytes,
-        content.clone(),
-    );
+    let signature_validator = Validator::new(header.clone(), validation_ctx_receiver, *header_bytes, content.clone());
     Ok(IncomingMessage {
         header,
         content,
@@ -166,10 +161,7 @@ pub async fn write_202_message<W: AsyncWrite + Unpin, M: MessageBody>(
     let Some(netbios) = use_as_netbios_content(&buf) else {
         return Err(WriteError::MessageTooLong);
     };
-    netbios
-        .write_into_async(w)
-        .await
-        .map_err(WriteError::Connection)
+    netbios.write_into_async(w).await.map_err(WriteError::Connection)
 }
 
 #[derive(Debug)]

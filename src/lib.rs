@@ -5,6 +5,7 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, Utc};
 
 pub mod attributes;
 pub mod client;
+pub mod connection;
 pub mod dir;
 mod error;
 pub mod file;

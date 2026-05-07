@@ -12,7 +12,8 @@ use kenobi::{
 
 use crate::{
     ReadIntLe,
-    client::{Connection, GuestPolicy},
+    client::GuestPolicy,
+    connection::Connection,
     error::{ErrorResponse2, ServerError},
     header::{Command202, SyncHeader202Incoming, SyncHeader202Outgoing},
     message::{MessageBody, ReadError as MsgReadError, WriteError as MsgWriteError},
