@@ -70,17 +70,14 @@ impl File {
     pub(crate) async fn new(
         tree_connection: &Arc<DiskTreeConnection>,
         path: &str,
+        desired_access: AccessMask,
         create_disposition: CreateDisposition,
     ) -> Result<(File, CreateActionTaken), OpenError> {
         let header = SyncHeader202Outgoing::from_tree_con(tree_connection.as_ref(), Command202::Create);
         let request_body = FileCreateRequest {
             oplock_level: None,
             impersonation_level: ImpersonationLevel::Impersonation,
-            desired_access: AccessMask::READ_DATA
-                | AccessMask::WRITE_DATA
-                | AccessMask::READ_ATTRIBUTES
-                | AccessMask::READ_EA
-                | AccessMask::READ_CONTROL,
+            desired_access,
             file_attributes: FileAttributes::EMPTY,
             create_options: 0x40 | 0x200,
             share_access: ShareAccess::SHARE_READ | ShareAccess::SHARE_WRITE,
@@ -368,26 +365,26 @@ pub enum ImpersonationLevel {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AccessMask(u32);
 impl AccessMask {
-    pub(crate) const READ_DATA: Self = Self(0x01);
-    pub(crate) const WRITE_DATA: Self = Self(0x02);
-    pub(crate) const APPEND_DATA: Self = Self(0x04);
-    pub(crate) const READ_EA: Self = Self(0x08);
-    pub(crate) const WRITE_EA: Self = Self(0x10);
-    pub(crate) const DELETE_CHILD: Self = Self(0x40);
-    pub(crate) const EXECUTE: Self = Self(0x20);
-    pub(crate) const READ_ATTRIBUTES: Self = Self(0x80);
-    pub(crate) const WRITE_ATTRIBUTES: Self = Self(0x100);
-    pub(crate) const DELETE: Self = Self(0x10000);
-    pub(crate) const READ_CONTROL: Self = Self(0x20000);
-    pub(crate) const WRITE_DAC: Self = Self(0x40000);
-    pub(crate) const WRITE_OWNER: Self = Self(0x80000);
-    pub(crate) const SYNCHRONIZE: Self = Self(0x100000);
-    pub(crate) const ACCESS_SYSTEM_SECURITY: Self = Self(0x1000000);
-    pub(crate) const MAXIMUM_ALLOWED: Self = Self(0x2000000);
-    pub(crate) const GENERIC_ALL: Self = Self(0x10000000);
-    pub(crate) const GENERIC_EXECUTE: Self = Self(0x20000000);
-    pub(crate) const GENERIC_WRITE: Self = Self(0x40000000);
-    pub(crate) const GENERIC_READ: Self = Self(0x80000000);
+    pub const READ_DATA: Self = Self(0x01);
+    pub const WRITE_DATA: Self = Self(0x02);
+    pub const APPEND_DATA: Self = Self(0x04);
+    pub const READ_EA: Self = Self(0x08);
+    pub const WRITE_EA: Self = Self(0x10);
+    pub const DELETE_CHILD: Self = Self(0x40);
+    pub const EXECUTE: Self = Self(0x20);
+    pub const READ_ATTRIBUTES: Self = Self(0x80);
+    pub const WRITE_ATTRIBUTES: Self = Self(0x100);
+    pub const DELETE: Self = Self(0x10000);
+    pub const READ_CONTROL: Self = Self(0x20000);
+    pub const WRITE_DAC: Self = Self(0x40000);
+    pub const WRITE_OWNER: Self = Self(0x80000);
+    pub const SYNCHRONIZE: Self = Self(0x100000);
+    pub const ACCESS_SYSTEM_SECURITY: Self = Self(0x1000000);
+    pub const MAXIMUM_ALLOWED: Self = Self(0x2000000);
+    pub const GENERIC_ALL: Self = Self(0x10000000);
+    pub const GENERIC_EXECUTE: Self = Self(0x20000000);
+    pub const GENERIC_WRITE: Self = Self(0x40000000);
+    pub const GENERIC_READ: Self = Self(0x80000000);
 
     pub fn empty() -> Self {
         Self::default()

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use flamenco::{
     client::Client202,
-    file::CreateDisposition,
+    file::{AccessMask, CreateDisposition},
     session::Session202,
     tree::{Tree, TreeConnection},
 };
@@ -30,7 +30,11 @@ async fn main() {
         .unwrap();
     let tree = Arc::new(tree);
     let mut file = tree
-        .open_file(&file_path, CreateDisposition::default())
+        .open_file(
+            &file_path,
+            AccessMask::READ_ATTRIBUTES | AccessMask::READ_DATA,
+            CreateDisposition::default(),
+        )
         .await
         .unwrap()
         .0;

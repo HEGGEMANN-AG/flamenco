@@ -34,13 +34,14 @@ pub struct Directory {
 pub(crate) async fn open(
     tree_connection: &Arc<DiskTreeConnection>,
     path: &str,
+    desired_access: AccessMask,
     create_disposition: DirCreateDisposition,
 ) -> Result<(Directory, CreateActionTaken), CreateDirError> {
     let header = SyncHeader202Outgoing::from_tree_con(tree_connection.as_ref(), Command202::Create);
     let request = FileCreateRequest {
         oplock_level: None,
         impersonation_level: ImpersonationLevel::Impersonation,
-        desired_access: AccessMask::READ_DATA | AccessMask::READ_ATTRIBUTES,
+        desired_access,
         file_attributes: FileAttributes::EMPTY,
         share_access: ShareAccess::SHARE_READ,
         create_disposition: create_disposition.into(),

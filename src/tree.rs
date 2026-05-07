@@ -10,7 +10,7 @@ use crate::{
     dir::{CreateDirError, DirCreateDisposition, Directory},
     error::{ErrorResponse2, ServerError},
     file::{
-        File, OpenError,
+        AccessMask, File, OpenError,
         create::{CreateActionTaken, CreateDisposition},
     },
     header::{Command202, SyncHeader202Incoming, SyncHeader202Outgoing},
@@ -95,16 +95,18 @@ impl DiskTreeConnection {
     pub async fn open_file(
         self: &Arc<Self>,
         path: &str,
+        access_mask: AccessMask,
         create_disposition: CreateDisposition,
     ) -> Result<(File, CreateActionTaken), OpenError> {
-        File::new(self, path, create_disposition).await
+        File::new(self, path, access_mask, create_disposition).await
     }
     pub async fn open_directory(
         self: &Arc<Self>,
         path: &str,
+        access_mask: AccessMask,
         create_disposition: DirCreateDisposition,
     ) -> Result<(Directory, CreateActionTaken), CreateDirError> {
-        crate::dir::open(self, path, create_disposition).await
+        crate::dir::open(self, path, access_mask, create_disposition).await
     }
 }
 
