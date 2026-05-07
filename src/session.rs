@@ -15,7 +15,7 @@ use crate::{
     client::GuestPolicy,
     connection::Connection,
     error::{ErrorResponse2, ServerError},
-    header::{Command202, SyncHeader202Incoming, SyncHeader202Outgoing},
+    header::{Command202, SyncHeader202Outgoing, SyncHeaderIncoming},
     message::{MessageBody, ReadError as MsgReadError, WriteError as MsgWriteError},
     sign::SecurityMode,
     tree::{TreeConnectError, TreeConnection},
@@ -67,6 +67,8 @@ impl Session202 {
             let client = &connection.client;
             let header = SyncHeader202Outgoing {
                 command: Command202::SessionSetup,
+                credit_charge: 1,
+                credit_request: 1,
                 credits: 0,
                 flags: 0,
                 next_command: None,
@@ -148,6 +150,8 @@ impl Session202 {
     pub async fn logoff(self) {
         let logoff_header = SyncHeader202Outgoing {
             command: Command202::Logoff,
+            credit_charge: 1,
+            credit_request: 1,
             credits: 0,
             flags: 0,
             next_command: None,
@@ -168,7 +172,7 @@ impl Session202 {
     }
 }
 
-fn verify_session_setup_header(header: &SyncHeader202Incoming) -> Result<(), SessionSetupError> {
+fn verify_session_setup_header(header: &SyncHeaderIncoming) -> Result<(), SessionSetupError> {
     if header.command != Command202::SessionSetup || header.is_async() || header.tree_id.is_some() {
         Err(SessionSetupError::InvalidMessage)
     } else {
@@ -176,7 +180,7 @@ fn verify_session_setup_header(header: &SyncHeader202Incoming) -> Result<(), Ses
     }
 }
 
-fn verify_logoff_header(header: &SyncHeader202Incoming) -> Result<(), LogoffError> {
+fn verify_logoff_header(header: &SyncHeaderIncoming) -> Result<(), LogoffError> {
     if header.command != Command202::Logoff || header.is_async() {
         Err(LogoffError::InvalidMessage)
     } else {
@@ -193,6 +197,7 @@ pub enum SessionSetupError {
     Io(std::io::Error),
     InitializeSecurityContext(InitializeError),
     DisallowedGuestAccess,
+    NotEnoughCredits,
     AuthContextTokenTooLong,
     SessionKeyTooShort,
     InvalidMessage,
@@ -205,6 +210,7 @@ impl std::error::Error for SessionSetupError {
             Self::InitializeSecurityContext(_)
             | Self::DisallowedGuestAccess
             | Self::AuthContextTokenTooLong
+            | Self::NotEnoughCredits
             | Self::SessionKeyTooShort
             | Self::InvalidMessage
             | Self::ServerError { .. } => None,
@@ -220,6 +226,7 @@ impl Display for SessionSetupError {
             Self::AuthContextTokenTooLong => write!(f, "Auth context by the server was too long"),
             Self::SessionKeyTooShort => write!(f, "Session key by GSSAPI was too short"),
             Self::InvalidMessage => write!(f, "Server sent an invalid message"),
+            Self::NotEnoughCredits => write!(f, "Not enough credits for this operation"),
             Self::ServerError { code, .. } => write!(f, "Server sent error code {code}"),
         }
     }
@@ -227,6 +234,7 @@ impl Display for SessionSetupError {
 impl From<MsgWriteError> for SessionSetupError {
     fn from(value: MsgWriteError) -> Self {
         match value {
+            MsgWriteError::NotEnoughCredits => Self::NotEnoughCredits,
             MsgWriteError::Connection(error) => Self::Io(error),
             MsgWriteError::MessageTooLong => Self::AuthContextTokenTooLong,
         }
@@ -291,6 +299,12 @@ impl MessageBody for SessionSetupRequest<'_> {
     fn size_hint(&self) -> usize {
         24 + self.buffer.len()
     }
+    fn send_payload_size(&self) -> u32 {
+        0
+    }
+    fn expected_response_payload_size(&self) -> u32 {
+        0
+    }
 }
 
 #[derive(Debug)]
@@ -347,5 +361,14 @@ impl MessageBody for LogoffRequest {
     }
     fn size_hint(&self) -> usize {
         4
+    }
+    fn send_payload_size(&self) -> u32 {
+        unreachable!()
+    }
+    fn expected_response_payload_size(&self) -> u32 {
+        unreachable!()
+    }
+    fn calculate_credits(&self) -> u16 {
+        1
     }
 }

@@ -171,6 +171,12 @@ impl<'c, T: FileRange> MessageBody for IoCtlRequest<'c, T> {
             IoCtlRequestKind::SrvRequestResumeKey => {}
         }
     }
+    fn send_payload_size(&self) -> u32 {
+        self.kind.input_buffer_length()
+    }
+    fn expected_response_payload_size(&self) -> u32 {
+        self.max_output_reponse
+    }
 }
 
 #[derive(Debug, Clone)]

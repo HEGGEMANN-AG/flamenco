@@ -65,6 +65,7 @@ pub(crate) async fn server_copy<T: FileRange>(
         .signup_message(out_header, &ioctl, false, session_key)
         .await
         .map_err(|we| match we {
+            WriteError::NotEnoughCredits => ServerCopyError::NotEnoughCredits,
             WriteError::Connection(error) => ServerCopyError::Io(error),
             WriteError::MessageTooLong => ServerCopyError::InvalidMessage,
         })?;
@@ -100,6 +101,7 @@ pub(crate) async fn server_copy<T: FileRange>(
 #[derive(Debug)]
 pub enum ServerCopyError {
     FilesFromDifferentTrees,
+    NotEnoughCredits,
     Io(std::io::Error),
     InvalidMessage,
     Refused {
@@ -113,9 +115,11 @@ impl std::error::Error for ServerCopyError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io(io) => Some(io),
-            Self::Refused { .. } | Self::FilesFromDifferentTrees | Self::InvalidMessage | Self::ServerError(_, _) => {
-                None
-            }
+            Self::Refused { .. }
+            | Self::FilesFromDifferentTrees
+            | Self::NotEnoughCredits
+            | Self::InvalidMessage
+            | Self::ServerError(_, _) => None,
         }
     }
 }
@@ -129,6 +133,7 @@ impl Display for ServerCopyError {
         match self {
             Self::FilesFromDifferentTrees => write!(f, "The file handles provided are from different tree connections"),
             Self::InvalidMessage => write!(f, "A message sent by the server was invalid"),
+            Self::NotEnoughCredits => write!(f, "Not enough credits for this operation"),
             Self::Io(io) => write!(f, "An error occured while reading or writing: {io}"),
             Self::Refused {
                 max_chunk_count,

@@ -3,31 +3,50 @@ use uuid::Uuid;
 use crate::{ReadIntLe, message::MessageBody, sign::SecurityMode};
 use std::io::{Read, Seek, SeekFrom};
 
-/// Negotiate request in SMB2020 must set client ID to 0
 #[derive(Debug)]
-pub struct NegotiateRequest202 {
-    pub security_mode: SecurityMode,
+pub struct Capabilities(u32);
+impl Capabilities {
+    pub const NONE: Self = Self(0);
+    pub const SMB2_GLOBAL_CAP_LARGE_MTU: Self = Self(0x04);
 }
 
-impl MessageBody for NegotiateRequest202 {
+/// Negotiate request in SMB2020 must set client ID to 0
+#[derive(Debug)]
+pub struct NegotiateRequest<'d> {
+    pub capabilities: Capabilities,
+    pub security_mode: SecurityMode,
+    pub dialects: &'d [Dialect],
+}
+
+impl MessageBody for NegotiateRequest<'_> {
     fn write_to(&self, w: &mut Vec<u8>) {
         // structure size
         w.extend_from_slice(&36u16.to_le_bytes());
         // dialect count
-        w.extend_from_slice(&1u16.to_le_bytes());
+        w.extend_from_slice(&(self.dialects.len() as u16).to_le_bytes());
         // Empty security mode
         w.extend_from_slice(&(self.security_mode as u16).to_le_bytes());
         // Reserved
         w.extend_from_slice(&0u16.to_le_bytes());
-        w.extend_from_slice(&0u32.to_le_bytes());
+        // Capabilities
+        w.extend_from_slice(&self.capabilities.0.to_le_bytes());
         w.extend_from_slice(&[0u8; 16]);
         // client start time
         w.extend_from_slice(&0u64.to_le_bytes());
         // dialect 202
+        for dialect in self.dialects {
+            w.extend_from_slice(&dialect.to_int().to_le_bytes());
+        }
         w.extend_from_slice(&0x0202u16.to_le_bytes());
     }
     fn size_hint(&self) -> usize {
         38
+    }
+    fn send_payload_size(&self) -> u32 {
+        0
+    }
+    fn expected_response_payload_size(&self) -> u32 {
+        0
     }
 }
 
@@ -116,6 +135,16 @@ impl Dialect {
             0x0311 => Some(Self::SMB311),
             0x02FF => Some(Self::Wildcard),
             _ => None,
+        }
+    }
+    fn to_int(self) -> u16 {
+        match self {
+            Dialect::SMB2020 => 0x0202,
+            Dialect::SMB21 => 0x0210,
+            Dialect::SMB30 => 0x0300,
+            Dialect::SMB302 => 0x0302,
+            Dialect::SMB311 => 0x0311,
+            Dialect::Wildcard => todo!(),
         }
     }
 }

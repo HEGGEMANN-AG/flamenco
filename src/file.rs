@@ -21,7 +21,7 @@ use crate::{
         read::{ReadFileError, ReadRequest, ReadResponse, ReadResponseError},
         server_copy::{ServerCopyError, ServerCopyResponse},
     },
-    header::{Command202, SyncHeader202Incoming, SyncHeader202Outgoing},
+    header::{Command202, SyncHeader202Outgoing, SyncHeaderIncoming},
     ioctl::SourceKey,
     message::WriteError,
     tree::{DiskTreeConnection, Tree},
@@ -92,6 +92,7 @@ impl File {
             .signup_message(header, &request_body, false, key)
             .await
             .map_err(|e| match e {
+                WriteError::NotEnoughCredits => OpenError::NotEnoughCredits,
                 WriteError::Connection(error) => OpenError::Io(error),
                 WriteError::MessageTooLong => OpenError::InvalidMessage,
             })?;
@@ -153,6 +154,7 @@ impl File {
             .signup_message(header, &req, true, key)
             .await
             .map_err(|w| match w {
+                WriteError::NotEnoughCredits => ReadFileError::NotEnoughCredits,
                 WriteError::Connection(error) => ReadFileError::Io(error),
                 WriteError::MessageTooLong => ReadFileError::InvalidMessage,
             })?;
@@ -180,7 +182,7 @@ impl File {
         {
             Ok(t) => t,
             Err(WriteError::Connection(io)) => return Err(io),
-            Err(WriteError::MessageTooLong) => unreachable!(),
+            Err(WriteError::MessageTooLong) | Err(WriteError::NotEnoughCredits) => unreachable!(),
         };
         if let Some(code) = NonZero::new(header.status) {
             panic!("Error with code {code}");
@@ -283,7 +285,7 @@ impl AsyncSeek for File {
     }
 }
 
-fn verify_create_header(header: &SyncHeader202Incoming) -> Result<(), OpenError> {
+fn verify_create_header(header: &SyncHeaderIncoming) -> Result<(), OpenError> {
     if header.command != Command202::Create || header.is_async() {
         Err(OpenError::InvalidMessage)
     } else {
@@ -291,7 +293,7 @@ fn verify_create_header(header: &SyncHeader202Incoming) -> Result<(), OpenError>
     }
 }
 
-fn verify_read_header(header: &SyncHeader202Incoming) -> Result<(), ReadFileError> {
+fn verify_read_header(header: &SyncHeaderIncoming) -> Result<(), ReadFileError> {
     if header.command != Command202::Read || header.is_async() {
         Err(ReadFileError::InvalidMessage)
     } else {
@@ -299,7 +301,7 @@ fn verify_read_header(header: &SyncHeader202Incoming) -> Result<(), ReadFileErro
     }
 }
 
-pub(crate) fn verify_close_header(header: &SyncHeader202Incoming) -> Result<(), ReadCloseError> {
+pub(crate) fn verify_close_header(header: &SyncHeaderIncoming) -> Result<(), ReadCloseError> {
     if header.command != Command202::Close || header.is_async() {
         Err(ReadCloseError::InvalidHeader)
     } else {
@@ -312,6 +314,7 @@ pub enum OpenError {
     IsADirectory,
     Io(std::io::Error),
     InvalidMessage,
+    NotEnoughCredits,
     ServerError { code: NonZero<u32>, body: ErrorResponse2 },
 }
 impl std::error::Error for OpenError {
@@ -326,6 +329,7 @@ impl Display for OpenError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::IsADirectory => write!(f, "File opened is a directory"),
+            Self::NotEnoughCredits => write!(f, "Not enough credits for this operation"),
             Self::InvalidMessage => write!(f, "Message sent by the server was invalid"),
             Self::Io(io) => write!(f, "IO Error: {io}"),
             Self::ServerError { code, .. } => write!(f, "Server sent an error with code {code}"),

@@ -9,7 +9,9 @@ pub(crate) const FLAG_SIGNED: u32 = 0x08;
 /// No status and signature, since they're not supported on the sender anyway
 #[derive(Debug, Default)]
 pub struct SyncHeader202Outgoing {
+    pub credit_charge: u16,
     pub command: Command202,
+    pub credit_request: u16,
     pub credits: u16,
     pub flags: u32,
     pub next_command: Option<NonZero<u32>>,
@@ -21,7 +23,9 @@ impl SyncHeader202Outgoing {
     pub fn from_session(session: &Session202, command: Command202) -> Self {
         Self {
             command,
-            credits: 0,
+            credit_charge: 0,
+            credits: 1,
+            credit_request: 1,
             flags: if session.requires_signing() { FLAG_SIGNED } else { 0 },
             next_command: None,
             message_id: 0,
@@ -40,10 +44,9 @@ impl SyncHeader202Outgoing {
         let mut bytes = [0u8; 64];
         bytes[0..4].copy_from_slice(&PROTOCOL_ID);
         bytes[4..6].copy_from_slice(&64u16.to_le_bytes());
-        // credit charge and status is already 0
-        bytes[6..8].copy_from_slice(&1u16.to_le_bytes());
+        bytes[6..8].copy_from_slice(&self.credit_charge.to_le_bytes());
         bytes[12..14].copy_from_slice(&self.command.as_u16().to_le_bytes());
-        bytes[14..16].copy_from_slice(&1u16.to_le_bytes());
+        bytes[14..16].copy_from_slice(&self.credit_request.to_le_bytes());
         bytes[16..20].copy_from_slice(&self.flags.to_le_bytes());
         bytes[20..24].copy_from_slice(&self.next_command.map_or(0, NonZero::get).to_le_bytes());
         bytes[24..32].copy_from_slice(&self.message_id.to_le_bytes());
@@ -54,7 +57,7 @@ impl SyncHeader202Outgoing {
 }
 
 #[derive(Debug)]
-pub struct SyncHeader202Incoming {
+pub struct SyncHeaderIncoming {
     /// ignored when sending
     pub status: u32,
     pub command: Command202,
@@ -66,7 +69,7 @@ pub struct SyncHeader202Incoming {
     pub session_id: Option<NonZero<u64>>,
     pub signature: [u8; 16],
 }
-impl SyncHeader202Incoming {
+impl SyncHeaderIncoming {
     pub fn from_bytes(b: &[u8; 64]) -> Result<Self, Error> {
         if b[0..4] != PROTOCOL_ID {
             return Err(Error::InvalidProtocolID);

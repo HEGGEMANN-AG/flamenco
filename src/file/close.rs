@@ -18,6 +18,12 @@ impl MessageBody for CloseRequest {
         w.extend_from_slice(&persistent);
         w.extend_from_slice(&volatile);
     }
+    fn send_payload_size(&self) -> u32 {
+        0
+    }
+    fn expected_response_payload_size(&self) -> u32 {
+        0
+    }
 }
 
 #[derive(Clone, Debug)]

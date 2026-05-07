@@ -56,6 +56,15 @@ impl MessageBody for FileCreateRequest<'_> {
         w.extend_from_slice(&0u32.to_le_bytes());
         w.extend_from_slice(&path);
     }
+    fn send_payload_size(&self) -> u32 {
+        unreachable!()
+    }
+    fn expected_response_payload_size(&self) -> u32 {
+        unreachable!()
+    }
+    fn calculate_credits(&self) -> u16 {
+        1
+    }
 }
 
 #[derive(Debug)]

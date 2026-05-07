@@ -112,6 +112,12 @@ impl<'sp> MessageBody for QueryDirectoryRequest<'sp> {
         w.extend_from_slice(&self.output_buffer_length.to_le_bytes());
         w.extend_from_slice(&pat);
     }
+    fn send_payload_size(&self) -> u32 {
+        crate::to_wide(self.search_pattern).len() as u32
+    }
+    fn expected_response_payload_size(&self) -> u32 {
+        self.output_buffer_length
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]

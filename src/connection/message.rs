@@ -14,14 +14,14 @@ use tokio::{
 };
 
 use crate::{
-    header::{FLAG_SIGNED, SyncHeader202Incoming, SyncHeader202Outgoing},
+    header::{FLAG_SIGNED, SyncHeaderIncoming, SyncHeader202Outgoing},
     message::{MessageBody, ReadError, WriteError},
     sign::{ValidationContext, ValidationError},
 };
 
 #[derive(Debug)]
 pub struct IncomingMessage {
-    pub header: Arc<SyncHeader202Incoming>,
+    pub header: Arc<SyncHeaderIncoming>,
     pub content: Arc<[u8]>,
     pub signature_validator: Validator,
 }
@@ -37,7 +37,7 @@ pub async fn read_202_message<R: AsyncRead + Unpin>(
             "Not enough data for header",
         )));
     };
-    let header = SyncHeader202Incoming::from_bytes(header_bytes).unwrap();
+    let header = SyncHeaderIncoming::from_bytes(header_bytes).unwrap();
     let content: Arc<[u8]> = Arc::from(message_body);
     let header = Arc::new(header);
     let signature_validator = Validator::new(header.clone(), validation_ctx_receiver, *header_bytes, content.clone());
@@ -51,7 +51,7 @@ pub async fn read_202_message<R: AsyncRead + Unpin>(
 #[derive(Debug)]
 pub struct Validator {
     header_bytes: [u8; 64],
-    parsed_header: Arc<SyncHeader202Incoming>,
+    parsed_header: Arc<SyncHeaderIncoming>,
     body: Arc<[u8]>,
     signature: [u8; 16],
 
@@ -59,7 +59,7 @@ pub struct Validator {
 }
 impl Validator {
     fn new(
-        header: Arc<SyncHeader202Incoming>,
+        header: Arc<SyncHeaderIncoming>,
         validation_ctx: Receiver<ValidationContext>,
         header_bytes: [u8; 64],
         body: Arc<[u8]>,
@@ -176,7 +176,7 @@ enum ValidationDecision {
 const STATUS_PENDING: u32 = 0x00000103;
 
 fn should_enforce_signature_validation(
-    header: &SyncHeader202Incoming,
+    header: &SyncHeaderIncoming,
     session_requires_signing: bool,
 ) -> Result<ValidationDecision, ValidationError> {
     let is_signed = header.flags & FLAG_SIGNED != 0;

@@ -55,6 +55,7 @@ pub(crate) async fn open(
         .signup_message(header, &request, false, key)
         .await
         .map_err(|err| match err {
+            message::WriteError::NotEnoughCredits => CreateDirError::NotEnoughCredits,
             message::WriteError::Connection(error) => CreateDirError::Io(error),
             message::WriteError::MessageTooLong => CreateDirError::InvalidMessage,
         })?;
@@ -110,7 +111,7 @@ impl Directory {
         {
             Ok(t) => t,
             Err(WriteError::Connection(io)) => return Err(io),
-            Err(WriteError::MessageTooLong) => unreachable!(),
+            Err(WriteError::NotEnoughCredits) | Err(WriteError::MessageTooLong) => unreachable!(),
         };
         if let Some(code) = NonZero::new(header.status) {
             panic!("Error with code {code}");
@@ -159,6 +160,7 @@ impl Directory {
 pub enum CreateDirError {
     InvalidMessage,
     NotADirectory,
+    NotEnoughCredits,
     Io(std::io::Error),
     ServerError { code: NonZero<u32>, body: ErrorResponse2 },
 }
@@ -166,7 +168,7 @@ impl std::error::Error for CreateDirError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io(io) => Some(io),
-            Self::InvalidMessage | Self::NotADirectory | Self::ServerError { .. } => None,
+            Self::InvalidMessage | Self::NotADirectory | Self::NotEnoughCredits | Self::ServerError { .. } => None,
         }
     }
 }
@@ -175,6 +177,7 @@ impl Display for CreateDirError {
         match self {
             Self::InvalidMessage => write!(f, "the message sent by the server is invalid"),
             Self::Io(io) => write!(f, "IO Error: {io}"),
+            Self::NotEnoughCredits => write!(f, "Not enough credits for this operation"),
             Self::NotADirectory => write!(f, "the file opened is not a directory"),
             Self::ServerError { code, .. } => write!(f, "Server sent error code {code}"),
         }

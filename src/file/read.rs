@@ -31,10 +31,7 @@ impl MessageBody for ReadRequest {
         w.push(0);
         w.extend_from_slice(&self.length.to_le_bytes());
         w.extend_from_slice(&self.offset.to_le_bytes());
-        let FileId {
-            persistent,
-            volatile,
-        } = self.id;
+        let FileId { persistent, volatile } = self.id;
         w.extend_from_slice(&persistent);
         w.extend_from_slice(&volatile);
         w.extend_from_slice(&self.minimum_count.to_le_bytes());
@@ -46,6 +43,12 @@ impl MessageBody for ReadRequest {
         w.extend_from_slice(&0u16.to_le_bytes());
         // Channel Info Length
         w.extend_from_slice(&0u16.to_le_bytes());
+    }
+    fn send_payload_size(&self) -> u32 {
+        1
+    }
+    fn expected_response_payload_size(&self) -> u32 {
+        self.length
     }
 }
 
@@ -91,22 +94,22 @@ impl From<std::io::Error> for ReadResponseError {
 pub enum ReadFileError {
     Io(std::io::Error),
     InvalidMessage,
-    ServerError {
-        code: NonZero<u32>,
-        body: ErrorResponse2,
-    },
+    NotEnoughCredits,
+    ServerError { code: NonZero<u32>, body: ErrorResponse2 },
 }
 impl ReadFileError {
     pub fn collapse_to_io_error(self) -> std::io::Error {
         match self {
-            ReadFileError::InvalidMessage => std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "server sent an invalid message",
-            ),
+            ReadFileError::InvalidMessage => {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "server sent an invalid message")
+            }
             ReadFileError::Io(io) => io,
             ReadFileError::ServerError { code, body } => {
                 dbg!(code, body);
                 std::io::Error::other("server sent a protocol error")
+            }
+            ReadFileError::NotEnoughCredits => {
+                std::io::Error::new(std::io::ErrorKind::FileTooLarge, "not enough credits")
             }
         }
     }

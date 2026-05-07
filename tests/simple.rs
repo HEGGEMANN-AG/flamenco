@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use flamenco::{
-    client::Client202,
+    client::Client,
     file::{AccessMask, CreateDisposition},
     session::Session202,
     tree::{Tree, TreeConnection},
@@ -16,7 +16,7 @@ async fn main() {
     let target_spn = std::env::var("FLAMENCO_TEST_TARGET_SPN").ok();
     let share_path = std::env::var("FLAMENCO_TEST_SHARE_PATH").unwrap();
     let file_path = std::env::var("FLAMENCO_TEST_FILE").unwrap();
-    let client = Client202::new(true);
+    let client = Client::new_210(true);
     let credentials = Credentials::outbound(own_spn.as_deref(), Mechanism::Spnego).unwrap();
     let server_copy = server.clone();
     let (con, drive) = client.connect(server_copy).await.unwrap();

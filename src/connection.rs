@@ -6,7 +6,7 @@ use std::{
     ops::DerefMut,
     sync::{
         Arc, Weak,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU16, AtomicU64, Ordering},
     },
 };
 
@@ -23,27 +23,29 @@ use tokio::{
 use uuid::Uuid;
 
 use crate::{
-    client::Client202,
+    client::{Client, ClientCompat},
     connection::message::IncomingMessage,
     error::{ErrorResponse2, ServerError},
-    header::{Command202, SyncHeader202Incoming, SyncHeader202Outgoing},
+    header::{Command202, SyncHeader202Outgoing, SyncHeaderIncoming},
     message::{MessageBody, ReadError, WriteError},
-    negotiate::{Dialect, NegotiateError, NegotiateRequest202, NegotiateResponse},
+    negotiate::{Capabilities, Dialect, NegotiateError, NegotiateRequest, NegotiateResponse},
     session::{Session202, SessionSetupError},
     sign::{SecurityMode, ValidationContext},
 };
 
 mod message;
 
+const MINIMUM_CREDITS: u16 = 128;
 const MINIMUM_TRANSACT_SIZE: u32 = 65536;
 
-pub(crate) type OutstandingRequests = HashMap<u64, Sender<(Arc<SyncHeader202Incoming>, Arc<[u8]>)>>;
+pub(crate) type OutstandingRequests = HashMap<u64, Sender<(Arc<SyncHeaderIncoming>, Arc<[u8]>)>>;
 type OpenSessions = HashMap<NonZero<u64>, Weak<Session202>>;
 
 struct ConnectionHandle<'ch> {
     write_tcp: &'ch Mutex<OwnedWriteHalf>,
     message_id: &'ch AtomicU64,
     outstanding_requests: &'ch Mutex<OutstandingRequests>,
+    credits: Option<&'ch AtomicU16>,
 }
 impl<'ch> ConnectionHandle<'ch> {
     pub(crate) async fn signup_message(
@@ -52,20 +54,40 @@ impl<'ch> ConnectionHandle<'ch> {
         msg: &impl MessageBody,
         add_null: bool,
         key: Option<[u8; 16]>,
-    ) -> Result<(Arc<SyncHeader202Incoming>, Arc<[u8]>), crate::message::WriteError> {
+    ) -> Result<(Arc<SyncHeaderIncoming>, Arc<[u8]>), crate::message::WriteError> {
         let mut wtcp = self.write_tcp.lock().await;
         let next_message_id = self.message_id.fetch_add(1, Ordering::Relaxed);
         header.message_id = next_message_id;
+        if let Some(credits) = self.credits {
+            let mut current = credits.load(Ordering::Acquire);
+            let charge = msg.calculate_credits();
+            let new = loop {
+                if current < charge {
+                    return Err(WriteError::NotEnoughCredits);
+                }
+                let new = current - charge;
+                match credits.compare_exchange_weak(current, new, Ordering::AcqRel, Ordering::Acquire) {
+                    Ok(n) => break n,
+                    Err(actual) => current = actual,
+                }
+            };
+            header.credit_charge = charge;
+            header.credit_request = MINIMUM_CREDITS.saturating_sub(new);
+        }
         let (sx, rx) = tokio::sync::oneshot::channel();
         self.outstanding_requests.lock().await.insert(next_message_id, sx);
         message::write_202_message(wtcp.deref_mut(), key, header, msg, add_null).await?;
-        Ok(rx.await.expect("dropped sender?"))
+        let (header, body) = rx.await.expect("dropped sender?");
+        if let Some(credits) = self.credits {
+            credits.fetch_add(header.credits, Ordering::AcqRel);
+        }
+        Ok((header, body))
     }
 }
 
 #[derive(Debug)]
 pub struct Connection {
-    pub(crate) client: Arc<Client202>,
+    pub(crate) client: Arc<Client>,
     outstanding_requests: Arc<Mutex<OutstandingRequests>>,
     open_sessions: Arc<RwLock<OpenSessions>>,
     message_id: AtomicU64,
@@ -74,9 +96,11 @@ pub struct Connection {
     max_read_size: u32,
     max_write_size: u32,
     server_guid: Uuid,
-    supports_dfs: bool,
+    capabilities: u32,
     negotiate_time: u64,
     server_start_time: u64,
+    max_dialect: Dialect,
+    credits: Option<AtomicU16>,
     /// What the server requires
     requires_signing: bool,
     shutdown_handle: Option<Sender<()>>,
@@ -87,6 +111,7 @@ impl Connection {
             write_tcp: &self.write_tcp,
             message_id: &self.message_id,
             outstanding_requests: &self.outstanding_requests,
+            credits: self.usable_credits(),
         }
     }
     pub(crate) async fn signup_message(
@@ -95,7 +120,7 @@ impl Connection {
         msg: &impl MessageBody,
         add_null: bool,
         key: Option<[u8; 16]>,
-    ) -> Result<(Arc<SyncHeader202Incoming>, Arc<[u8]>), crate::message::WriteError> {
+    ) -> Result<(Arc<SyncHeaderIncoming>, Arc<[u8]>), crate::message::WriteError> {
         self.as_handle().signup_message(header, msg, add_null, key).await
     }
     pub(crate) async fn signup_session(&self, session_id: NonZero<u64>, session: Weak<Session202>) -> Result<(), ()> {
@@ -118,7 +143,7 @@ impl Connection {
         self.max_write_size
     }
     pub fn supports_dfs(&self) -> bool {
-        self.supports_dfs
+        self.capabilities & 0x01 != 0
     }
     pub fn server_guid(&self) -> Uuid {
         self.server_guid
@@ -147,8 +172,16 @@ impl Connection {
     ) -> Result<Arc<Session202>, SessionSetupError> {
         Session202::new(self, credentials, target_spn).await
     }
+    fn supports_multi_credits(&self) -> bool {
+        self.capabilities & 0x04 != 0
+    }
+    fn usable_credits(&self) -> Option<&AtomicU16> {
+        self.credits
+            .as_ref()
+            .filter(|_| self.max_dialect != Dialect::SMB2020 && self.supports_multi_credits())
+    }
     pub async fn new(
-        client: &Arc<Client202>,
+        client: &Arc<Client>,
         addr: impl ToSocketAddrs,
     ) -> Result<
         (
@@ -176,7 +209,7 @@ impl Connection {
     }
 
     async fn finish_connection(
-        client: Arc<Client202>,
+        client: Arc<Client>,
         wtcp: OwnedWriteHalf,
         open_sessions: Arc<RwLock<OpenSessions>>,
         outstanding_requests: Arc<Mutex<OutstandingRequests>>,
@@ -185,13 +218,27 @@ impl Connection {
         let write_tcp = Mutex::new(wtcp);
         let header = SyncHeader202Outgoing::default();
         let message_id = AtomicU64::default();
-        let neg_req = NegotiateRequest202 {
+        let (capabilities, dialects) = match &client.maximum_compatibility {
+            ClientCompat::Smb202 => (Capabilities::NONE, vec![Dialect::SMB2020]),
+            ClientCompat::Smb210 { .. } => (
+                if client.supports_multi_credit() {
+                    Capabilities::SMB2_GLOBAL_CAP_LARGE_MTU
+                } else {
+                    Capabilities::NONE
+                },
+                vec![Dialect::SMB2020, Dialect::SMB21],
+            ),
+        };
+        let neg_req = NegotiateRequest {
             security_mode: client.sent_security_mode(),
+            capabilities,
+            dialects: &dialects,
         };
         let ch = ConnectionHandle {
             write_tcp: &write_tcp,
             message_id: &message_id,
             outstanding_requests: &outstanding_requests,
+            credits: None,
         };
         let (header, body) = ch.signup_message(header, &neg_req, false, None).await?;
         if header.command != Command202::Negotiate {
@@ -219,8 +266,10 @@ impl Connection {
         {
             return Err(ConnectError::MaxMessageSizeInsufficient);
         }
-        let Dialect::SMB2020 = dialect else {
-            return Err(ConnectError::ServerChoseUnsupportedDialect);
+        let max_dialect = match dialect {
+            Dialect::SMB2020 => Dialect::SMB2020,
+            Dialect::SMB21 => Dialect::SMB21,
+            _ => return Err(ConnectError::ServerChoseUnsupportedDialect),
         };
         let connection = Connection {
             client,
@@ -228,11 +277,13 @@ impl Connection {
             open_sessions,
             message_id,
             write_tcp,
+            credits: (capabilities & 0x04 != 0).then_some(AtomicU16::new(header.credits)),
             max_transaction_size: max_transact_size,
             max_read_size,
             max_write_size,
             server_guid,
-            supports_dfs: capabilities & 0x01 != 0,
+            max_dialect,
+            capabilities,
             negotiate_time: system_time,
             server_start_time,
             requires_signing: security_mode == SecurityMode::SigningRequired,
@@ -345,7 +396,7 @@ impl Drop for Connection {
     }
 }
 
-fn verify_negotiate_header(header: &SyncHeader202Incoming) -> Result<(), ConnectError> {
+fn verify_negotiate_header(header: &SyncHeaderIncoming) -> Result<(), ConnectError> {
     if header.command != Command202::Negotiate
         || header.is_async()
         || header.tree_id.is_some()
@@ -408,7 +459,7 @@ impl From<WriteError> for ConnectError {
     fn from(value: WriteError) -> Self {
         match value {
             WriteError::Connection(io) => Self::Io(io),
-            WriteError::MessageTooLong => unreachable!(),
+            WriteError::MessageTooLong | WriteError::NotEnoughCredits => unreachable!(),
         }
     }
 }

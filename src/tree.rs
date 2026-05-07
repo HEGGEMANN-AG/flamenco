@@ -13,7 +13,7 @@ use crate::{
         AccessMask, File, OpenError,
         create::{CreateActionTaken, CreateDisposition},
     },
-    header::{Command202, SyncHeader202Incoming, SyncHeader202Outgoing},
+    header::{Command202, SyncHeader202Outgoing, SyncHeaderIncoming},
     message::{MessageBody, ReadError as MsgReadError, WriteError as MsgWriteError},
     session::Session202,
     share_name::{InvalidShareName, ShareName},
@@ -162,14 +162,14 @@ impl Tree for TreeConnection {
     }
 }
 
-fn verify_tree_connect_header(header: &SyncHeader202Incoming) -> Result<(), TreeConnectError> {
+fn verify_tree_connect_header(header: &SyncHeaderIncoming) -> Result<(), TreeConnectError> {
     if header.command != Command202::TreeConnect || header.is_async() {
         return Err(TreeConnectError::InvalidMessage);
     }
     Ok(())
 }
 
-fn verify_tree_disconnect_header(header: &SyncHeader202Incoming) -> Result<(), TreeDisconnectError> {
+fn verify_tree_disconnect_header(header: &SyncHeaderIncoming) -> Result<(), TreeDisconnectError> {
     if header.command != Command202::TreeDisconnect || header.is_async() {
         Err(TreeDisconnectError::InvalidMessage)
     } else {
@@ -182,6 +182,7 @@ pub enum TreeConnectError {
     Io(std::io::Error),
     InvalidPath(InvalidSharePath),
     InvalidMessage,
+    NotEnoughCredits,
     Server { code: NonZero<u32>, body: ErrorResponse2 },
 }
 impl std::error::Error for TreeConnectError {
@@ -189,17 +190,18 @@ impl std::error::Error for TreeConnectError {
         match self {
             Self::Io(io) => Some(io),
             Self::InvalidPath(isp) => Some(isp),
-            Self::InvalidMessage | Self::Server { .. } => None,
+            Self::InvalidMessage | Self::NotEnoughCredits | Self::Server { .. } => None,
         }
     }
 }
 impl Display for TreeConnectError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TreeConnectError::Io(error) => write!(f, "IO Error: {error}"),
-            TreeConnectError::InvalidPath(invalid_share_path) => write!(f, "Invalid share path: {invalid_share_path}"),
-            TreeConnectError::InvalidMessage => write!(f, "Invalid message from server"),
-            TreeConnectError::Server { code, .. } => write!(f, "Server sent error code {code}"),
+            Self::Io(error) => write!(f, "IO Error: {error}"),
+            Self::InvalidPath(invalid_share_path) => write!(f, "Invalid share path: {invalid_share_path}"),
+            Self::NotEnoughCredits => write!(f, "Not enough credits for this operation"),
+            Self::InvalidMessage => write!(f, "Invalid message from server"),
+            Self::Server { code, .. } => write!(f, "Server sent error code {code}"),
         }
     }
 }
@@ -214,6 +216,7 @@ impl ServerError for TreeConnectError {
 impl From<MsgWriteError> for TreeConnectError {
     fn from(value: MsgWriteError) -> Self {
         match value {
+            MsgWriteError::NotEnoughCredits => Self::NotEnoughCredits,
             MsgWriteError::Connection(io) => Self::Io(io),
             MsgWriteError::MessageTooLong => unreachable!("share path limit already enforces this"),
         }
@@ -303,6 +306,12 @@ impl MessageBody for TreeConnectRequest<'_> {
         w.extend_from_slice(&(utf16.len() as u16).to_le_bytes());
         w.extend_from_slice(&utf16);
     }
+    fn expected_response_payload_size(&self) -> u32 {
+        0
+    }
+    fn send_payload_size(&self) -> u32 {
+        0
+    }
 }
 
 #[derive(Debug)]
@@ -367,6 +376,12 @@ impl MessageBody for TreeDisconnectRequest {
     fn write_to(&self, w: &mut Vec<u8>) {
         w.extend_from_slice(&4u16.to_le_bytes());
         w.extend_from_slice(&0u16.to_le_bytes());
+    }
+    fn expected_response_payload_size(&self) -> u32 {
+        0
+    }
+    fn send_payload_size(&self) -> u32 {
+        0
     }
 }
 
