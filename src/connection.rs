@@ -158,22 +158,17 @@ impl Connection {
         std::io::Error,
     > {
         let (rtcp, wtcp) = TcpStream::connect(addr).await?.into_split();
-        let neg_header = SyncHeader202Outgoing::default();
 
-        let message_id = AtomicU64::default();
         let outstanding_requests: Arc<Mutex<OutstandingRequests>> = Arc::default();
         let open_sessions: Arc<RwLock<OpenSessions>> = Arc::default();
         let (shutdown_handle, shutdown_recv) = tokio::sync::oneshot::channel();
         let drive = Self::drive(open_sessions.clone(), outstanding_requests.clone(), rtcp, shutdown_recv);
-        let write_tcp = Mutex::new(wtcp);
         Ok((
             Self::finish_connection(
                 client.clone(),
-                write_tcp,
-                message_id,
+                wtcp,
                 open_sessions,
                 outstanding_requests,
-                neg_header,
                 shutdown_handle,
             ),
             drive,
@@ -182,13 +177,14 @@ impl Connection {
 
     async fn finish_connection(
         client: Arc<Client202>,
-        write_tcp: Mutex<OwnedWriteHalf>,
-        message_id: AtomicU64,
+        wtcp: OwnedWriteHalf,
         open_sessions: Arc<RwLock<OpenSessions>>,
         outstanding_requests: Arc<Mutex<OutstandingRequests>>,
-        neg_header: SyncHeader202Outgoing,
         shutdown_handle: Sender<()>,
     ) -> Result<Arc<Connection>, ConnectError> {
+        let write_tcp = Mutex::new(wtcp);
+        let header = SyncHeader202Outgoing::default();
+        let message_id = AtomicU64::default();
         let neg_req = NegotiateRequest202 {
             security_mode: client.sent_security_mode(),
         };
@@ -197,7 +193,7 @@ impl Connection {
             message_id: &message_id,
             outstanding_requests: &outstanding_requests,
         };
-        let (header, body) = ch.signup_message(neg_header, &neg_req, false, None).await?;
+        let (header, body) = ch.signup_message(header, &neg_req, false, None).await?;
         if header.command != Command202::Negotiate {
             return Err(ConnectError::InvalidMessage);
         }
