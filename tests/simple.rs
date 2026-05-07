@@ -19,7 +19,9 @@ async fn main() {
     let client = Client202::new(true);
     let credentials = Credentials::outbound(own_spn.as_deref(), Mechanism::Spnego).unwrap();
     let server_copy = server.clone();
-    let con = client.connect(server_copy).await.unwrap();
+    let (con, drive) = client.connect(server_copy).await.unwrap();
+    tokio::spawn(drive);
+    let con = con.await.unwrap();
     let session = Session202::new(con, credentials, target_spn.as_deref()).await.unwrap();
     let tree = TreeConnection::new(session.clone(), &share_path)
         .await

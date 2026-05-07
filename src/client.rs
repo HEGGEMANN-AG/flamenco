@@ -34,7 +34,16 @@ impl Client202 {
             SecurityMode::SigningEnabled
         }
     }
-    pub async fn connect(self: &Arc<Self>, addr: impl ToSocketAddrs) -> Result<Arc<Connection>, ConnectError> {
+    pub async fn connect(
+        self: &Arc<Self>,
+        addr: impl ToSocketAddrs,
+    ) -> Result<
+        (
+            impl Future<Output = Result<Arc<Connection>, ConnectError>>,
+            impl Future<Output = ()> + Send + 'static,
+        ),
+        std::io::Error,
+    > {
         Connection::new(self, addr).await
     }
 }
