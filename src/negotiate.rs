@@ -123,7 +123,6 @@ pub enum Dialect {
     SMB30,
     SMB302,
     SMB311,
-    Wildcard,
 }
 impl Dialect {
     fn from_value(i: u16) -> Option<Self> {
@@ -133,7 +132,6 @@ impl Dialect {
             0x0300 => Some(Self::SMB30),
             0x0302 => Some(Self::SMB302),
             0x0311 => Some(Self::SMB311),
-            0x02FF => Some(Self::Wildcard),
             _ => None,
         }
     }
@@ -144,7 +142,6 @@ impl Dialect {
             Dialect::SMB30 => 0x0300,
             Dialect::SMB302 => 0x0302,
             Dialect::SMB311 => 0x0311,
-            Dialect::Wildcard => todo!(),
         }
     }
 }
