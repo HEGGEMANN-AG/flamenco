@@ -24,6 +24,7 @@ use crate::{
     header::{Command, SyncHeaderIncoming, SyncHeaderOutgoing},
     ioctl::SourceKey,
     message::WriteError,
+    negotiate::Dialect,
     tree::{DiskTreeConnection, Tree},
 };
 
@@ -87,6 +88,10 @@ impl File {
         let session = tree_connection.session();
         let key = session.requires_signing().then_some(session.session_key()).copied();
 
+        assert!(
+            !(session.connection.dialect() == Dialect::SMB2020
+                && request_body.oplock_level == Some(OplockLevel::Lease))
+        );
         let (header, body) = session
             .connection
             .signup_message(header, &request_body, false, key)
@@ -351,7 +356,7 @@ impl ServerError for OpenError {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OplockLevel {
     II,
     Exclusive,
