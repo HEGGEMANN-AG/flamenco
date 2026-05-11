@@ -39,7 +39,7 @@ type ReadFuture = Pin<Box<dyn Future<Output = Result<Box<[u8]>, ReadFileError>> 
 pub struct File {
     tree_connection: Arc<DiskTreeConnection>,
     id: FileId,
-    oplock_level: Option<OplockLevel202>,
+    oplock_level: Option<OplockLevel>,
     offset: u64,
     allocation_size: u64,
     end_of_file: u64,
@@ -352,10 +352,11 @@ impl ServerError for OpenError {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum OplockLevel202 {
+pub enum OplockLevel {
     II,
     Exclusive,
     Batch,
+    Lease,
 }
 
 #[derive(Clone, Copy, Debug)]

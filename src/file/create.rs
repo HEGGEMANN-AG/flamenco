@@ -3,13 +3,13 @@ use std::io::Read;
 use crate::{
     ReadIntLe,
     attributes::FileAttributes,
-    file::{AccessMask, FileId, ImpersonationLevel, OplockLevel202, ShareAccess},
+    file::{AccessMask, FileId, ImpersonationLevel, OplockLevel, ShareAccess},
     message::MessageBody,
 };
 
 #[derive(Debug)]
 pub(crate) struct FileCreateRequest<'p> {
-    pub(crate) oplock_level: Option<OplockLevel202>,
+    pub(crate) oplock_level: Option<OplockLevel>,
     pub(crate) impersonation_level: ImpersonationLevel,
     pub(crate) desired_access: AccessMask,
     pub(crate) file_attributes: FileAttributes,
@@ -27,9 +27,10 @@ impl MessageBody for FileCreateRequest<'_> {
         w.push(0);
         let oplock_byte: u8 = match self.oplock_level {
             None => 0x00,
-            Some(OplockLevel202::II) => 0x01,
-            Some(OplockLevel202::Exclusive) => 0x08,
-            Some(OplockLevel202::Batch) => 0x09,
+            Some(OplockLevel::II) => 0x01,
+            Some(OplockLevel::Exclusive) => 0x08,
+            Some(OplockLevel::Batch) => 0x09,
+            Some(OplockLevel::Lease) => 0xFF,
         };
         w.push(oplock_byte);
         let imp_byte: u8 = match self.impersonation_level {
@@ -69,7 +70,7 @@ impl MessageBody for FileCreateRequest<'_> {
 
 #[derive(Debug)]
 pub(crate) struct CreateResponse {
-    pub(crate) oplock_level: Option<OplockLevel202>,
+    pub(crate) oplock_level: Option<OplockLevel>,
     pub(crate) create_action: CreateActionTaken,
     pub(crate) creation_time: u64,
     pub(crate) last_access_time: u64,
@@ -90,9 +91,9 @@ impl CreateResponse {
         r.read_exact(std::slice::from_mut(&mut oplock))?;
         let oplock_level = match oplock {
             0x00 => None,
-            0x01 => Some(OplockLevel202::II),
-            0x08 => Some(OplockLevel202::Exclusive),
-            0x09 => Some(OplockLevel202::Batch),
+            0x01 => Some(OplockLevel::II),
+            0x08 => Some(OplockLevel::Exclusive),
+            0x09 => Some(OplockLevel::Batch),
             _ => return Err(ReadError::InvalidOplockLevel),
         };
         // flags

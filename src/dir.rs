@@ -8,7 +8,7 @@ use crate::{
     dir::query::QueryDirectoryError,
     error::{ErrorResponse2, ServerError},
     file::{
-        self, AccessMask, FileId, ImpersonationLevel, OplockLevel202, ShareAccess,
+        self, AccessMask, FileId, ImpersonationLevel, OplockLevel, ShareAccess,
         close::{CloseRequest, CloseResponse},
         create::{CreateActionTaken, CreateDisposition, CreateResponse, FileCreateRequest},
         verify_close_header,
@@ -23,7 +23,7 @@ pub mod query;
 pub struct Directory {
     tree_connection: Arc<DiskTreeConnection>,
     id: FileId,
-    oplock_level: Option<OplockLevel202>,
+    oplock_level: Option<OplockLevel>,
     allocation_size: u64,
     end_of_file: u64,
     creation_time: u64,
