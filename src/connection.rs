@@ -25,7 +25,7 @@ use tracing::{error, trace, warn};
 use uuid::Uuid;
 
 use crate::{
-    client::{Client, ClientCompat},
+    client::Client,
     connection::message::IncomingMessage,
     credits::Credits,
     error::{ErrorResponse2, ServerError},
@@ -242,17 +242,8 @@ impl Connection {
         let write_tcp = Mutex::new(wtcp);
         let header = SyncHeaderOutgoing::default();
         let message_id = AtomicU64::default();
-        let (capabilities, dialects) = match &client.maximum_compatibility {
-            ClientCompat::Smb202 => (Capabilities::NONE, vec![Dialect::SMB2020]),
-            ClientCompat::Smb210 { .. } => (
-                if client.supports_multi_credit() {
-                    Capabilities::SMB2_GLOBAL_CAP_LARGE_MTU
-                } else {
-                    Capabilities::NONE
-                },
-                vec![Dialect::SMB2020, Dialect::SMB21],
-            ),
-        };
+        let capabilities = Capabilities::SMB2_GLOBAL_CAP_LARGE_MTU;
+        let dialects = vec![Dialect::SMB2020, Dialect::SMB21];
         let neg_req = NegotiateRequest {
             security_mode: client.sent_security_mode(),
             capabilities,

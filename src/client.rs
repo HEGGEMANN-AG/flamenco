@@ -1,9 +1,8 @@
-use std::sync::{Arc, atomic::AtomicU16};
+use std::sync::Arc;
 use tokio::net::ToSocketAddrs;
 
 use crate::{
     connection::{ConnectError, Connection},
-    negotiate::Dialect,
     sign::SecurityMode,
 };
 
@@ -19,24 +18,12 @@ pub enum GuestPolicy {
 pub struct Client {
     pub requires_signing: bool,
     pub guest_policy: GuestPolicy,
-    pub maximum_compatibility: ClientCompat,
 }
 impl Client {
-    pub fn new_202(requires_signing: bool) -> Arc<Self> {
+    pub fn new(requires_signing: bool) -> Arc<Self> {
         Self {
             requires_signing,
             guest_policy: Default::default(),
-            maximum_compatibility: ClientCompat::Smb202,
-        }
-        .into()
-    }
-    pub fn new_210(requires_signing: bool) -> Arc<Self> {
-        Self {
-            requires_signing,
-            guest_policy: Default::default(),
-            maximum_compatibility: ClientCompat::Smb210 {
-                credits: AtomicU16::new(0),
-            },
         }
         .into()
     }
@@ -62,26 +49,5 @@ impl Client {
         std::io::Error,
     > {
         Connection::new(self, addr).await
-    }
-
-    pub fn supports_multi_credit(&self) -> bool {
-        match &self.maximum_compatibility {
-            ClientCompat::Smb202 => false,
-            ClientCompat::Smb210 { .. } => true,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum ClientCompat {
-    Smb202,
-    Smb210 { credits: AtomicU16 },
-}
-impl ClientCompat {
-    pub fn dialect(&self) -> Dialect {
-        match self {
-            Self::Smb202 => Dialect::SMB2020,
-            ClientCompat::Smb210 { .. } => Dialect::SMB21,
-        }
     }
 }
