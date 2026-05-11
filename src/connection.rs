@@ -122,7 +122,7 @@ pub struct Connection {
     max_read_size: u32,
     max_write_size: u32,
     server_guid: Uuid,
-    capabilities: u32,
+    capabilities: Capabilities,
     negotiate_time: u64,
     server_start_time: u64,
     negotiated_dialect: Dialect,
@@ -169,7 +169,7 @@ impl Connection {
         self.max_write_size
     }
     pub fn supports_dfs(&self) -> bool {
-        self.capabilities & 0x01 != 0
+        self.capabilities.contains(Capabilities::SMB2_GLOBAL_CAP_DFS)
     }
     pub fn server_guid(&self) -> Uuid {
         self.server_guid
@@ -199,7 +199,7 @@ impl Connection {
         Session::new(self, credentials, target_spn).await
     }
     pub fn supports_multi_credits(&self) -> bool {
-        self.capabilities & 0x04 != 0
+        self.capabilities.contains(Capabilities::SMB2_GLOBAL_CAP_LARGE_MTU)
     }
     pub fn dialect(&self) -> Dialect {
         self.negotiated_dialect
@@ -297,7 +297,9 @@ impl Connection {
         };
         let credits = match dialect {
             Dialect::SMB2020 => Credits::Simple(AtomicU16::new(header.credits)),
-            _ if capabilities & 0x04 == 0 => Credits::Simple(AtomicU16::new(header.credits)),
+            _ if capabilities.contains(Capabilities::SMB2_GLOBAL_CAP_LARGE_MTU) => {
+                Credits::Simple(AtomicU16::new(header.credits))
+            }
             _ => Credits::Multi(AtomicU16::new(header.credits)),
         };
         let connection = Connection {

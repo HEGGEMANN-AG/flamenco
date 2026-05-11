@@ -3,11 +3,18 @@ use uuid::Uuid;
 use crate::{ReadIntLe, message::MessageBody, sign::SecurityMode};
 use std::io::{Read, Seek, SeekFrom};
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Capabilities(u32);
 impl Capabilities {
     pub const NONE: Self = Self(0);
+    pub const SMB2_GLOBAL_CAP_DFS: Self = Self(0x01);
+    pub const SMB2_GLOBAL_CAP_LEASING: Self = Self(0x02);
     pub const SMB2_GLOBAL_CAP_LARGE_MTU: Self = Self(0x04);
+}
+impl Capabilities {
+    pub fn contains(self, capability: Self) -> bool {
+        self.0 & capability.0 != 0
+    }
 }
 
 /// Negotiate request in SMB2020 must set client ID to 0
@@ -55,7 +62,7 @@ pub struct NegotiateResponse {
     pub security_mode: SecurityMode,
     pub dialect: Dialect,
     pub server_guid: Uuid,
-    pub capabilities: u32,
+    pub capabilities: Capabilities,
     pub max_transact_size: u32,
     pub max_read_size: u32,
     pub max_write_size: u32,
@@ -76,7 +83,7 @@ impl NegotiateResponse {
         let mut server_guid = [0u8; 16];
         r.read_exact(&mut server_guid)?;
         let server_guid = Uuid::from_bytes(server_guid);
-        let capabilities = r.read_u32_le()?;
+        let capabilities = Capabilities(r.read_u32_le()?);
         let max_transact_size = r.read_u32_le()?;
         let max_read_size = r.read_u32_le()?;
         let max_write_size = r.read_u32_le()?;
