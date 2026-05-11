@@ -190,7 +190,7 @@ impl File {
             Err(WriteError::MessageTooLong) | Err(WriteError::NotEnoughCredits) => unreachable!(),
         };
         if let Some(code) = NonZero::new(header.status) {
-            return Err(std::io::Error::other(format!("Server sent error code {code}")));
+            return Err(std::io::Error::other(format!("Server sent error code {code:x}")));
         }
         let _ = verify_close_header(&header);
         let _body = CloseResponse::read_from(&mut body.as_ref());
