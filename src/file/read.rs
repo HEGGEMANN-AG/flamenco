@@ -103,19 +103,17 @@ pub enum ReadFileError {
 impl ReadFileError {
     pub fn collapse_to_io_error(self) -> std::io::Error {
         match self {
-            ReadFileError::InvalidMessage => {
+            Self::InvalidMessage => {
                 std::io::Error::new(std::io::ErrorKind::InvalidData, "server sent an invalid message")
             }
-            ReadFileError::Io(io) => io,
+            Self::Io(io) => io,
             #[allow(unused_variables)]
-            ReadFileError::ServerError { code, .. } => {
+            Self::ServerError { code, .. } => {
                 #[cfg(feature = "tracing")]
                 error!("Server sent protocol error code {code}");
                 std::io::Error::other("server sent a protocol error")
             }
-            ReadFileError::NotEnoughCredits => {
-                std::io::Error::new(std::io::ErrorKind::FileTooLarge, "not enough credits")
-            }
+            Self::NotEnoughCredits => std::io::Error::new(std::io::ErrorKind::FileTooLarge, "not enough credits"),
         }
     }
 }

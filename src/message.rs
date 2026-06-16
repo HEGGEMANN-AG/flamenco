@@ -19,7 +19,9 @@ pub(crate) trait MessageBody {
     fn size_hint(&self) -> usize {
         0
     }
+    /// Payload size used for calculating credit charge
     fn send_payload_size(&self) -> u32;
+    /// Expected Response payload size used for calculating credit charge
     fn expected_response_payload_size(&self) -> u32;
     fn calculate_credits(&self) -> u16 {
         self.send_payload_size()

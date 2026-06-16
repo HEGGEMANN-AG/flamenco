@@ -7,7 +7,7 @@ use flamenco::{
     tree::{Tree, TreeConnection},
 };
 use kenobi::{cred::Credentials, mech::Mechanism};
-use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn main() {
@@ -32,17 +32,15 @@ async fn main() {
     let mut file = tree
         .open_file(
             &file_path,
-            AccessMask::READ_ATTRIBUTES | AccessMask::READ_DATA,
-            CreateDisposition::default(),
+            AccessMask::READ_ATTRIBUTES | AccessMask::READ_DATA | AccessMask::WRITE_ATTRIBUTES | AccessMask::WRITE_DATA,
+            CreateDisposition::OpenIf,
         )
         .await
         .unwrap()
         .0;
+    file.write_all(b"Hello!").await.unwrap();
     eprintln!("Opened file");
-    let mut s = String::new();
-    file.read_to_string(&mut s).await.unwrap();
     file.close().await.unwrap();
     Arc::into_inner(tree).unwrap().disconnect().await;
     Arc::into_inner(session).unwrap().logoff().await;
-    println!("Read file: {s}");
 }

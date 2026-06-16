@@ -1,6 +1,6 @@
 use std::{
     fmt::Display,
-    io::{Cursor, ErrorKind, SeekFrom},
+    io::{Cursor, SeekFrom},
     num::NonZero,
     ops::BitOr,
     pin::Pin,
@@ -10,7 +10,7 @@ use std::{
 
 #[cfg(feature = "chrono")]
 use chrono::{DateTime, Utc};
-use tokio::io::{AsyncRead, AsyncSeek, ReadBuf};
+use tokio::io::{AsyncRead, AsyncSeek, AsyncWrite, ReadBuf};
 
 use crate::{
     attributes::FileAttributes,
@@ -20,6 +20,7 @@ use crate::{
         create::{CreateActionTaken, CreateResponse, FileCreateRequest},
         read::{ReadFileError, ReadRequest, ReadResponse, ReadResponseError},
         server_copy::{ServerCopyError, ServerCopyResponse},
+        write::{WriteFileError, WriteRequest, WriteResponse},
     },
     header::{Command, SyncHeaderIncoming, SyncHeaderOutgoing},
     ioctl::SourceKey,
@@ -35,8 +36,10 @@ pub mod create;
 mod read;
 mod resume_key;
 pub mod server_copy;
+mod write;
 
 type ReadFuture = Pin<Box<dyn Future<Output = Result<Box<[u8]>, ReadFileError>> + Sync + Send + 'static>>;
+type WriteFuture = Pin<Box<dyn Future<Output = Result<usize, WriteFileError>> + Sync + Send + 'static>>;
 pub struct File {
     tree_connection: Arc<DiskTreeConnection>,
     id: FileId,
@@ -48,7 +51,8 @@ pub struct File {
     last_access_time: u64,
     last_write_time: u64,
     change_time: u64,
-    future: Option<ReadFuture>,
+    read: Option<ReadFuture>,
+    write: Option<WriteFuture>,
 }
 impl std::fmt::Debug for File {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -131,7 +135,8 @@ impl File {
             last_access_time,
             last_write_time,
             change_time,
-            future: None,
+            read: None,
+            write: None,
         };
         Ok((file, create_action))
     }
@@ -237,6 +242,40 @@ impl File {
     pub fn change_time(&self) -> DateTime<Utc> {
         crate::chrono_from_filetime(self.change_time)
     }
+
+    async fn write_raw(
+        tree_connection: Arc<DiskTreeConnection>,
+        id: FileId,
+        offset: u64,
+        data: &[u8],
+    ) -> Result<u32, WriteFileError> {
+        if data.is_empty() {
+            return Ok(0);
+        }
+        let header = SyncHeaderOutgoing::from_tree_con(tree_connection.as_ref(), Command::Write);
+        let session = tree_connection.session();
+        let key = session.requires_signing().then_some(session.session_key()).copied();
+        let req = WriteRequest {
+            offset,
+            id,
+            data,
+            write_trough: false,
+        };
+        let (header, body) = session
+            .connection
+            .signup_message(header, &req, true, key)
+            .await
+            .map_err(|err| match err {
+                WriteError::Connection(error) => WriteFileError::Io(error),
+                WriteError::NotEnoughCredits => WriteFileError::NotEnoughCredits,
+                WriteError::MessageTooLong => WriteFileError::InvalidMessage,
+            })?;
+        if let Some(code) = NonZero::new(header.status) {
+            return Err(WriteFileError::handle_error_body(code, &body));
+        }
+        let WriteResponse { count } = WriteResponse::read_from(Cursor::new(body))?;
+        Ok(count)
+    }
 }
 impl AsyncRead for File {
     fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
@@ -253,14 +292,14 @@ impl AsyncRead for File {
         let tree = self.tree_connection.clone();
         let id = self.id;
         let offset = self.offset;
-        let fut = self.future.get_or_insert_with(|| {
+        let fut = self.read.get_or_insert_with(|| {
             let fut = async move { Self::read_raw(tree, id, offset, to_request, 0).await };
             Box::pin(fut)
         });
         match fut.as_mut().poll(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(res) => {
-                self.future = None;
+                self.read = None;
                 match res {
                     Ok(outbuf) => {
                         assert!(outbuf.len() <= to_request as usize);
@@ -287,6 +326,39 @@ impl AsyncSeek for File {
     }
     fn poll_complete(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<u64>> {
         Poll::Ready(Ok(self.offset))
+    }
+}
+impl AsyncWrite for File {
+    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<std::io::Result<usize>> {
+        let tree = self.tree_connection.clone();
+        let id = self.id;
+        let offset = self.offset;
+        let buf = buf.to_vec();
+        let fut = self.write.get_or_insert_with(|| {
+            let fut = async move {
+                let count = Self::write_raw(tree, id, offset, &buf).await?;
+                Ok(count as usize)
+            };
+            Box::pin(fut)
+        });
+        match fut.as_mut().poll(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(res) => {
+                self.write = None;
+                match res {
+                    Ok(written) => Poll::Ready(Ok(written)),
+                    Err(rd) => Poll::Ready(Err(rd.collapse_to_io_error())),
+                }
+            }
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
     }
 }
 
