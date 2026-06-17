@@ -3,6 +3,9 @@ use std::{
     num::NonZero,
 };
 
+#[cfg(feature = "tracing")]
+use tracing::error;
+
 use crate::{
     ReadIntLe,
     error::{ErrorResponse2, ServerError},
